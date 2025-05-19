@@ -1,0 +1,6 @@
+venv/
+cold_storage/
+query_history/
+
+*.db
+

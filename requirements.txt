@@ -1,0 +1,14 @@
+huggingface_hub
+streamlit
+pandas
+duckdb
+plotly
+numpy
+scikit-learn
+scipy
+psutil
+transformers
+accelerate
+torch
+auto-gptq
+optimum
