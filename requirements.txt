@@ -12,3 +12,4 @@ accelerate
 torch
 auto-gptq
 optimum
+openpyxl

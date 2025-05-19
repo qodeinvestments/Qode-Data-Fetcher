@@ -1,6 +1,8 @@
 venv/
 cold_storage/
 query_history/
+query_logs/
+__pycache__/
 
 *.db
 
