@@ -2,15 +2,14 @@ import duckdb
 import os
 
 DB_PATH = "qode_engine_data.db"
-DB_IN_MEMORY = ":memory:"
 QUERY_HISTORY_DIR = "query_history"
 DATA_DIR = "cold_storage"
 
 os.makedirs(QUERY_HISTORY_DIR, exist_ok=True)
 
-def get_duckdb_connection(in_memory=False):
+def get_duckdb_connection():
     """Get a DuckDB connection (cached for performance)"""
-    db_path = DB_IN_MEMORY if in_memory else DB_PATH
+    db_path = DB_PATH
     conn = duckdb.connect(db_path)
     print(f"Connected to DuckDB database at {db_path}")
     
@@ -154,4 +153,4 @@ def get_duckdb_connection(in_memory=False):
         
     return conn
 
-disk_conn = get_duckdb_connection(in_memory=False)
+disk_conn = get_duckdb_connection()

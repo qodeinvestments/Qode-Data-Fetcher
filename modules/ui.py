@@ -38,8 +38,8 @@ def show_sidebar(query_engine):
         else:
             if st.button("Delete All Queries", key="delete_all_queries", type="primary"):
                 try:
+                    import shutil
                     for query_info in user_queries:
-                        import shutil
                         shutil.rmtree(query_info['path'])
                     st.success("All queries deleted")
                     st.rerun()
@@ -47,19 +47,44 @@ def show_sidebar(query_engine):
                     st.error(f"Error deleting all queries: {str(e)}")
         
         for query_info in user_queries:
-            st.markdown(f"**{query_info['folder']}**")
+            st.markdown(f"**{query_info['name']}**")
             st.text(query_info['query'][:100] + ('...' if len(query_info['query']) > 100 else ''))
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
+            
             with col1:
                 if query_info['has_results']:
-                    with open(f"{query_info['path']}/results.xlsx", "rb") as f:
-                        st.download_button(
-                            "Results", f, 
-                            file_name=f"results_{query_info['folder']}.xlsx",
-                            mime="application/vnd.ms-excel",
-                            key=f"dl_{query_info['folder']}"
-                        )
+                    download_options = ["CSV", "Excel", "Parquet"]
+                    download_format = st.selectbox(
+                        "Format", 
+                        download_options, 
+                        key=f"fmt_{query_info['folder']}"
+                    )
+                    
+                    if download_format == "CSV":
+                        with open(f"{query_info['path']}/results.csv", "rb") as f:
+                            st.download_button(
+                                "Download", f, 
+                                file_name=f"{query_info['name']}.csv",
+                                mime="text/csv",
+                                key=f"dl_csv_{query_info['folder']}"
+                            )
+                    elif download_format == "Excel":
+                        with open(f"{query_info['path']}/results.xlsx", "rb") as f:
+                            st.download_button(
+                                "Download", f, 
+                                file_name=f"{query_info['name']}.xlsx",
+                                mime="application/vnd.ms-excel",
+                                key=f"dl_xlsx_{query_info['folder']}"
+                            )
+                    else:  # Parquet
+                        with open(f"{query_info['path']}/results.parquet", "rb") as f:
+                            st.download_button(
+                                "Download", f, 
+                                file_name=f"{query_info['name']}.parquet",
+                                mime="application/octet-stream",
+                                key=f"dl_parquet_{query_info['folder']}"
+                            )
             
             with col2:
                 if st.button("Load", key=f"load_{query_info['folder']}"):
@@ -71,8 +96,9 @@ def show_sidebar(query_engine):
                         
                         st.session_state['natural_query'] = nl
                         st.session_state['sql_query'] = sql
-                    except:
-                        st.error("Failed to load query")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to load query: {str(e)}")
             
             with col3:
                 if st.button("Delete", key=f"del_{query_info['folder']}"):
@@ -145,9 +171,7 @@ def render_main_interface(query_engine):
     
     if run_query and sql_query:
         with st.spinner("Executing query..."):
-            result = query_engine.execute_query(
-                sql_query, st.session_state.get('use_in_memory', False)
-            )
+            result = query_engine.execute_query(sql_query)
             
             if len(result) == 2:
                 results, execution_time = result
@@ -156,45 +180,49 @@ def render_main_interface(query_engine):
                 results, execution_time, error_message = result
             
             if results is not None:
-                query_id, query_dir = query_engine.save_query(natural_query, sql_query, results)
+                st.success(f"✅ Query executed successfully in {execution_time:.4f} seconds")
                 
-                st.success(f"✅ Query executed successfully in {execution_time:.4f} seconds (ID: {query_id})")
+                st.dataframe(results, use_container_width=True)
                 
-                tab1 = st.tabs(["Results"])
+                query_name = st.text_input("Query Name:", value=f"Query_{execution_time:.2f}s", 
+                                         placeholder="Enter a name for this query")
                 
-                with tab1:
-                    st.dataframe(results, use_container_width=True)
+                save_query = st.button("Save Query", use_container_width=True)
+                
+                if save_query:
+                    query_id, query_dir = query_engine.save_query(natural_query, sql_query, results, query_name)
+                    st.success(f"Query saved as '{query_name}'")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    csv = results.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "Download CSV",
+                        csv,
+                        f"query_results_{query_name if 'query_name' in locals() else 'data'}.csv",
+                        "text/csv",
+                        key='download-csv'
+                    )
+                
+                with col2:
+                    excel_buffer = query_engine.dataframe_to_excel(results)
+                    st.download_button(
+                        "Download Excel",
+                        excel_buffer,
+                        f"query_results_{query_name if 'query_name' in locals() else 'data'}.xlsx",
+                        "application/vnd.ms-excel",
+                        key='download-excel'
+                    )
                     
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        csv = results.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            "Download CSV",
-                            csv,
-                            f"query_results_{query_id}.csv",
-                            "text/csv",
-                            key='download-csv'
-                        )
-                    
-                    with col2:
-                        with open(f"{query_dir}/results.xlsx", "rb") as f:
-                            st.download_button(
-                                "Download Excel",
-                                f,
-                                f"query_results_{query_id}.xlsx",
-                                "application/vnd.ms-excel",
-                                key='download-excel'
-                            )
-                            
-                    with col3:
-                        with open(f"{query_dir}/results.parquet", "rb") as f:
-                            st.download_button(
-                                "Download Parquet",
-                                f,
-                                f"query_results_{query_id}.parquet",
-                                "application/octet-stream",
-                                key='download-parquet'
-                            )
+                with col3:
+                    parquet_buffer = query_engine.dataframe_to_parquet(results)
+                    st.download_button(
+                        "Download Parquet",
+                        parquet_buffer,
+                        f"query_results_{query_name if 'query_name' in locals() else 'data'}.parquet",
+                        "application/octet-stream",
+                        key='download-parquet'
+                    )
             else:
                 st.error(f"Query failed after {execution_time:.4f} seconds")
                 if error_message:

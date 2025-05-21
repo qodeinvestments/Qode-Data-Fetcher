@@ -19,9 +19,9 @@ def main():
     
     init_auth()
     
-    disk_conn, memory_conn = get_db_connections()
+    disk_conn = get_db_connections()
     
-    query_engine = QueryEngine(disk_conn, memory_conn)
+    query_engine = QueryEngine(disk_conn)
     
     if not st.session_state.get('logged_in', False):
         show_login()

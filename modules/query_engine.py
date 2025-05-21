@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import time
 import uuid
@@ -6,22 +7,12 @@ import datetime
 import traceback
 import pandas as pd
 import streamlit as st
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 class QueryEngine:
-    def __init__(self, disk_conn, memory_conn):
+    def __init__(self, disk_conn):
         self.disk_conn = disk_conn
-        self.memory_conn = memory_conn
-        self._initialize_model()
-
-    def _initialize_model(self):
-        model_name = "defog/sqlcoder-7b-2"
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, device_map="auto", torch_dtype=torch.float16
-        )
 
     def nl_to_sql(self, prompt):
         system_prompt = """### Task
@@ -66,7 +57,6 @@ Each has columns:
         return query
 
     def _is_read_only_query(self, query):
-        """Check if a query is read-only (SELECT only)."""
         query = re.sub(r'--.*?(\n|$)|/\*.*?\*/', '', query, flags=re.DOTALL)
         
         modify_pattern = r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|REPLACE|UPSERT|MERGE|COPY|WITH\s+RECURSIVE|GRANT|REVOKE)\b'
@@ -83,19 +73,15 @@ Each has columns:
                 
         return True
 
-    def execute_query(self, sql_query, in_memory=False):
+    def execute_query(self, sql_query):
         if not self._is_read_only_query(sql_query):
             error_message = "ERROR: Only SELECT queries are allowed. Data modification operations are blocked."
             return None, 0, error_message
-            
-        conn = self.memory_conn if in_memory else self.disk_conn
+
         start_time = time.time()
         
         try:
-            conn.execute("PRAGMA enable_profiling")
-            conn.execute("PRAGMA profiling_mode='detailed'")
-            
-            result = conn.execute(sql_query).fetchdf()
+            result = self.disk_conn.execute(sql_query).fetchdf()
             
             if not isinstance(result, pd.DataFrame):
                 result = pd.DataFrame(result)
@@ -104,7 +90,7 @@ Each has columns:
             
             execution_time = time.time() - start_time
             
-            self._log_query(sql_query, execution_time, in_memory, len(result))
+            self._log_query(sql_query, execution_time, len(result))
             
             return result, execution_time
         except Exception as e:
@@ -112,27 +98,40 @@ Each has columns:
             execution_time = time.time() - start_time
             return None, execution_time, error_traceback
 
-    def _log_query(self, sql_query, execution_time, in_memory, row_count):
+    def _log_query(self, sql_query, execution_time, row_count):
         query_log = {
             "timestamp": datetime.datetime.now().isoformat(),
             "query": sql_query,
             "execution_time": execution_time,
-            "in_memory": in_memory,
             "row_count": row_count,
             "user_id": st.session_state.get('user_id', 'anonymous')
         }
         
-        log_dir = "query_logs"
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = f"{log_dir}/query_log_{datetime.datetime.now().strftime('%Y%m%d')}.jsonl"
+        log_file = f"query_logs/query_log_{datetime.datetime.now().strftime('%Y%m%d')}.jsonl"
         
         with open(log_file, "a") as f:
             f.write(json.dumps(query_log) + "\n")
 
-    def save_query(self, natural_query, sql_query, results_df=None):
+    def dataframe_to_excel(self, df):
+        output = io.BytesIO()
+        df.to_excel(output, index=False, sheet_name='Results')
+        output.seek(0)
+        return output
+
+    def dataframe_to_parquet(self, df):
+        output = io.BytesIO()
+        df.to_parquet(output, index=False)
+        output.seek(0)
+        return output
+
+    def save_query(self, natural_query, sql_query, results_df=None, query_name="Query"):
         query_id = str(uuid.uuid4())[:8]
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        query_dir = f"{st.session_state['user_folder']}/{query_id}_{timestamp}"
+        
+        sanitized_name = "".join([c if c.isalnum() else "_" for c in query_name])
+        folder_name = f"{query_id}_{timestamp}_{sanitized_name}"
+        query_dir = f"{st.session_state['user_folder']}/{folder_name}"
+        
         os.makedirs(query_dir, exist_ok=True)
         
         with open(f"{query_dir}/input.txt", "w") as f:
@@ -140,9 +139,24 @@ Each has columns:
         
         with open(f"{query_dir}/query.sql", "w") as f:
             f.write(sql_query)
+            
+        with open(f"{query_dir}/metadata.json", "w") as f:
+            metadata = {
+                "name": query_name,
+                "created_at": timestamp,
+                "query_id": query_id
+            }
+            json.dump(metadata, f)
         
         if results_df is not None and not results_df.empty:
-            results_df.to_excel(f"{query_dir}/results.xlsx", index=False)
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [
+                    executor.submit(results_df.to_excel, f"{query_dir}/results.xlsx", index=False),
+                    executor.submit(results_df.to_csv, f"{query_dir}/results.csv", index=False),
+                    executor.submit(results_df.to_parquet, f"{query_dir}/results.parquet", index=False)
+                ]
+                for future in futures:
+                    future.result()
             
         return query_id, query_dir
 
@@ -153,21 +167,35 @@ Each has columns:
         query_folders = []
         for folder in os.listdir(st.session_state['user_folder']):
             folder_path = f"{st.session_state['user_folder']}/{folder}"
-            if os.path.isdir(folder_path):
-                try:
-                    with open(f"{folder_path}/input.txt", "r") as f:
-                        natural_query = f.read()
-                    
-                    has_results = os.path.exists(f"{folder_path}/results.xlsx")
-                    
-                    query_folders.append({
-                        "folder": folder,
-                        "path": folder_path,
-                        "query": natural_query,
-                        "has_results": has_results,
-                        "timestamp": folder.split("_", 1)[1] if "_" in folder else folder
-                    })
-                except Exception:
-                    pass
-        
+            
+            if not os.path.isdir(folder_path):
+                continue
+                
+            try:
+                with open(f"{folder_path}/input.txt", "r") as f:
+                    natural_query = f.read()
+                
+                query_name = folder.split("_", 2)[2].replace("_", " ") if len(folder.split("_")) > 2 else folder
+                
+                if os.path.exists(f"{folder_path}/metadata.json"):
+                    with open(f"{folder_path}/metadata.json", "r") as f:
+                        metadata = json.load(f)
+                        query_name = metadata.get("name", query_name)
+                
+                has_results = all(
+                    os.path.exists(f"{folder_path}/results.{ext}") 
+                    for ext in ["xlsx", "csv", "parquet"]
+                )
+                
+                query_folders.append({
+                    "folder": folder,
+                    "path": folder_path,
+                    "query": natural_query,
+                    "has_results": has_results,
+                    "timestamp": folder.split("_", 2)[1] if "_" in folder else folder,
+                    "name": query_name
+                })
+            except Exception:
+                pass
+                
         return sorted(query_folders, key=lambda x: x["timestamp"], reverse=True)[:limit]

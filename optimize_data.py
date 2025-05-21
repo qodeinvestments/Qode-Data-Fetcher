@@ -2,7 +2,6 @@ import duckdb
 import os
 
 DB_PATH = "qode_engine_data.db"
-DB_IN_MEMORY = ":memory:"
 QUERY_HISTORY_DIR = "query_history"
 DATA_DIR = "cold_storage"
 

@@ -2,7 +2,7 @@ import duckdb
 import time
 from datetime import datetime
 
-DB_PATH = "qode_engine_data_fetcher.db"
+DB_PATH = "qode_engine_data.db"
 
 try:
     conn = duckdb.connect(DB_PATH)
