@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+import re
 
 class QueryEngine:
     def __init__(self, disk_conn, memory_conn):
@@ -25,6 +26,7 @@ class QueryEngine:
     def nl_to_sql(self, prompt):
         system_prompt = """### Task
 Generate a SQL query for DuckDB that answers the following question.
+IMPORTANT: Only generate read-only SELECT queries. Do not generate any queries that modify data.
 
 ### Database Schema
 The database has tables such as:
@@ -57,9 +59,35 @@ Each has columns:
             decoded = decoded.split("SELECT", 1)[1]
             decoded = "SELECT " + decoded.split("###")[0].strip()
 
-        return decoded.strip()
+        query = decoded.strip()
+        if not self._is_read_only_query(query):
+            return "ERROR: Only SELECT queries are allowed."
+            
+        return query
+
+    def _is_read_only_query(self, query):
+        """Check if a query is read-only (SELECT only)."""
+        query = re.sub(r'--.*?(\n|$)|/\*.*?\*/', '', query, flags=re.DOTALL)
+        
+        modify_pattern = r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|REPLACE|UPSERT|MERGE|COPY|WITH\s+RECURSIVE|GRANT|REVOKE)\b'
+        if re.search(modify_pattern, query, re.IGNORECASE):
+            return False
+            
+        if not re.match(r'^\s*(SELECT|WITH\b(?!\s+RECURSIVE\b))', query, re.IGNORECASE):
+            return False
+            
+        if re.match(r'^\s*WITH\b(?!\s+RECURSIVE\b)', query, re.IGNORECASE):
+            after_with = re.sub(r'^\s*WITH\b(?!\s+RECURSIVE\b).*?(\bSELECT\b|$)', '', query, flags=re.DOTALL|re.IGNORECASE)
+            if not re.match(r'^\s*SELECT\b', after_with, re.IGNORECASE):
+                return False
+                
+        return True
 
     def execute_query(self, sql_query, in_memory=False):
+        if not self._is_read_only_query(sql_query):
+            error_message = "ERROR: Only SELECT queries are allowed. Data modification operations are blocked."
+            return None, 0, error_message
+            
         conn = self.memory_conn if in_memory else self.disk_conn
         start_time = time.time()
         
@@ -68,9 +96,7 @@ Each has columns:
             conn.execute("PRAGMA profiling_mode='detailed'")
             
             result = conn.execute(sql_query).fetchdf()
-            # profiling_info = conn.execute("SELECT * FROM pragma_last_profiling_output()").fetchdf()
             
-            # Convert result to DataFrame if not already
             if not isinstance(result, pd.DataFrame):
                 result = pd.DataFrame(result)
             if result.empty:
@@ -96,7 +122,9 @@ Each has columns:
             "user_id": st.session_state.get('user_id', 'anonymous')
         }
         
-        log_file = f"query_logs/query_log_{datetime.datetime.now().strftime('%Y%m%d')}.jsonl"
+        log_dir = "query_logs"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = f"{log_dir}/query_log_{datetime.datetime.now().strftime('%Y%m%d')}.jsonl"
         
         with open(log_file, "a") as f:
             f.write(json.dumps(query_log) + "\n")
@@ -139,7 +167,7 @@ Each has columns:
                         "has_results": has_results,
                         "timestamp": folder.split("_", 1)[1] if "_" in folder else folder
                     })
-                except:
+                except Exception:
                     pass
         
         return sorted(query_folders, key=lambda x: x["timestamp"], reverse=True)[:limit]

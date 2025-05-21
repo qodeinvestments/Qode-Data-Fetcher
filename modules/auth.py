@@ -5,17 +5,17 @@ import streamlit as st
 DEFAULT_PASSWORD = "qodeengine123"
 
 def init_auth():
-    if 'logged_in' not in st.session_state:
-        st.session_state['logged_in'] = False
-        
-    if 'user_name' not in st.session_state:
-        st.session_state['user_name'] = ""
-        
-    if 'user_id' not in st.session_state:
-        st.session_state['user_id'] = ""
-        
-    if 'user_folder' not in st.session_state:
-        st.session_state['user_folder'] = ""
+    session_vars = {
+        'logged_in': False,
+        'user_name': "",
+        'user_id': "",
+        'user_folder': "",
+        'current_page': 'main'
+    }
+    
+    for key, default_val in session_vars.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_val
 
 def validate_login(email, password):
     email_pattern = r'^([a-zA-Z]+)\.([a-zA-Z]+)@qodeinvest\.com$'
@@ -41,6 +41,7 @@ def logout():
     st.session_state['user_name'] = ""
     st.session_state['user_id'] = ""
     st.session_state['user_folder'] = ""
+    st.session_state['current_page'] = 'main'
 
 def show_login():
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -51,7 +52,7 @@ def show_login():
         st.markdown("## Qode Data Fetcher")
         
         with st.form("login_form"):
-            email = st.text_input("Email")
+            email = st.text_input("Email", placeholder="firstname.lastname@qodeinvest.com")
             password = st.text_input("Password", type="password")
             
             cols = st.columns([3, 2, 3])

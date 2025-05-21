@@ -10,7 +10,7 @@ class SystemMonitor:
         
         try:
             process = psutil.Process(os.getpid())
-            memory_usage = process.memory_info().rss / 1024 / 1024  # in MB
+            memory_usage = process.memory_info().rss / 1024 / 1024
             cpu_percent = process.cpu_percent(interval=0.1)
             
             col1, col2 = st.sidebar.columns(2)
@@ -18,21 +18,17 @@ class SystemMonitor:
             col2.metric("CPU (%)", f"{cpu_percent:.1f}")
             
             try:
-                db_size = os.path.getsize("qode_engine_data.db") / 1024 / 1024  # in MB
+                db_size = os.path.getsize("qode_engine_data.db") / 1024 / 1024
                 col1, col2 = st.sidebar.columns(2)
                 col1.metric("DB Size (MB)", f"{db_size:.1f}")
                 
-                active_queries = db_conn.execute("SELECT count(*) FROM pragma_database_size()").fetchone()[0]
-                col2.metric("DB Objects", active_queries)
-            except:
+                active_objects = db_conn.execute("SELECT count(*) FROM pragma_database_size()").fetchone()[0]
+                col2.metric("DB Objects", active_objects)
+            except Exception:
                 pass
-            
-        except:
+                
+        except Exception:
             st.sidebar.text("System metrics unavailable")
-        
+            
         st.sidebar.markdown("---")
         st.sidebar.markdown("© 2025 Qode Data Engine")
-
-def create_query_id():
-    import uuid
-    return str(uuid.uuid4())[:8]
