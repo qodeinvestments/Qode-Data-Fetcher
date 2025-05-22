@@ -1,5 +1,27 @@
 {
-    "kavan@.com":"pass1",
-    "vidhi@.com":"pass2",
-    "kavan@.com":"pass3"
-}
+    "ashwin.mandlik@qodeinvest.com": {
+      "password": "Qd8#mK9p",
+      "first_name": "Ashwin",
+      "last_name": "Mandlik"
+    },
+    "neha.bader@qodeinvest.com": {
+      "password": "Nx7@vL2q",
+      "first_name": "Neha",
+      "last_name": "Bader"
+    },
+    "jay.jain@qodeinvest.com": {
+      "password": "Jy5!tR8m",
+      "first_name": "Jay",
+      "last_name": "Jain"
+    },
+    "vidhi.chheda@qodeinvest.com": {
+      "password": "Vh3$nB6k",
+      "first_name": "Vidhi",
+      "last_name": "Chheda"
+    },
+    "kavan.sejpal@qodeinvest.com": {
+      "password": "Kv9&xP4w",
+      "first_name": "Kavan",
+      "last_name": "Sejpal"
+    }
+  }
