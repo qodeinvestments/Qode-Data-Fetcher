@@ -59,17 +59,9 @@ Each has columns:
     def _is_read_only_query(self, query):
         query = re.sub(r'--.*?(\n|$)|/\*.*?\*/', '', query, flags=re.DOTALL)
         
-        modify_pattern = r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|REPLACE|UPSERT|MERGE|COPY|WITH\s+RECURSIVE|GRANT|REVOKE)\b'
+        modify_pattern = r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|REPLACE|UPSERT|MERGE|COPY|GRANT|REVOKE)\b'
         if re.search(modify_pattern, query, re.IGNORECASE):
             return False
-            
-        if not re.match(r'^\s*(SELECT|WITH\b(?!\s+RECURSIVE\b))', query, re.IGNORECASE):
-            return False
-            
-        if re.match(r'^\s*WITH\b(?!\s+RECURSIVE\b)', query, re.IGNORECASE):
-            after_with = re.sub(r'^\s*WITH\b(?!\s+RECURSIVE\b).*?(\bSELECT\b|$)', '', query, flags=re.DOTALL|re.IGNORECASE)
-            if not re.match(r'^\s*SELECT\b', after_with, re.IGNORECASE):
-                return False
                 
         return True
 

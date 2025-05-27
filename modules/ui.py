@@ -81,11 +81,17 @@ def show_sidebar(query_engine):
     
     st.sidebar.markdown("---")
     
-    query_count = len(query_engine.get_user_queries(limit=100))
+    user_queries = query_engine.get_user_queries(limit=100)
+    query_count = len(user_queries)
+    
     with st.sidebar.expander(f"Your Recent Queries ({query_count})", expanded=False):
-        user_queries = query_engine.get_user_queries(limit=10)
+        recent_queries = query_engine.get_user_queries(limit=10)
         
-        if not user_queries:
+        if st.button("🔄 Refresh", key="refresh_queries", help="Refresh query list"):
+            if 'query_cache_timestamp' in st.session_state:
+                del st.session_state['query_cache_timestamp']
+        
+        if not recent_queries:
             st.info("No queries yet. Start exploring data!")
         else:
             col_del, col_clear = st.columns(2)
@@ -93,25 +99,22 @@ def show_sidebar(query_engine):
                 if st.button("🗑️ Clear All", key="delete_all_queries", help="Delete all saved queries"):
                     try:
                         import shutil
-                        for query_info in user_queries:
+                        for query_info in recent_queries:
                             shutil.rmtree(query_info['path'])
                         st.success("All queries deleted")
-                        st.rerun()
+                        if 'query_cache_timestamp' in st.session_state:
+                            del st.session_state['query_cache_timestamp']
                     except Exception as e:
                         st.error(f"Error deleting all queries: {str(e)}")
             
-            with col_clear:
-                if st.button("🔄 Refresh", key="refresh_queries", help="Refresh query list"):
-                    st.rerun()
-        
-        for i, query_info in enumerate(user_queries):
+        for i, query_info in enumerate(recent_queries):
             with st.container():
                 st.markdown(f"**{query_info['name']}**")
                 
                 truncated_query = query_info['query'][:80] + ('...' if len(query_info['query']) > 80 else '')
                 st.caption(truncated_query)
                 
-                col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
                     if query_info['has_results']:
@@ -167,17 +170,14 @@ def show_sidebar(query_engine):
                             st.error(f"Failed to load query: {str(e)}")
                 
                 with col3:
-                    if st.button("👁️", key=f"view_{query_info['folder']}", help="Preview results"):
-                        if query_info['has_results']:
-                            st.session_state[f'preview_{query_info["folder"]}'] = not st.session_state.get(f'preview_{query_info["folder"]}', False)
-                            st.rerun()
-                
-                with col4:
                     if st.button("🗑️", key=f"del_{query_info['folder']}", help="Delete query"):
                         try:
                             import shutil
                             shutil.rmtree(query_info['path'])
                             st.success("Deleted")
+                            
+                            if 'query_cache_timestamp' in st.session_state:
+                                del st.session_state['query_cache_timestamp']
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {str(e)}")
@@ -190,7 +190,7 @@ def show_sidebar(query_engine):
                     except Exception as e:
                         st.error(f"Preview error: {str(e)}")
                 
-                if i < len(user_queries) - 1:
+                if i < len(recent_queries) - 1:
                     st.markdown("---")
 
 def render_main_interface(query_engine):
@@ -323,8 +323,18 @@ def render_main_interface(query_engine):
                         with open(f"{query_folder_path}/{query_name}_natural_language.txt", "w") as f:
                             f.write(natural_query)
                         
+                        results.to_csv(f"{query_folder_path}/results.csv", index=False)
+                        
+                        with open(f"{query_folder_path}/query.sql", "w") as f:
+                            f.write(sql_query)
+                        with open(f"{query_folder_path}/input.txt", "w") as f:
+                            f.write(natural_query)
+                        
                         st.success(f"✅ Query saved as '{query_name}' in query_history/{user_id}/{query_name}/")
-                        st.balloons()
+                        
+                        if 'query_cache_timestamp' in st.session_state:
+                            del st.session_state['query_cache_timestamp']
+                        
                     except Exception as e:
                         st.error(f"❌ Failed to save query: {str(e)}")
                 
