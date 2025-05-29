@@ -52,13 +52,6 @@ def execute_with_timing(conn, query, description):
         logger.error(f"{description} - FAILED - Duration: {duration:.2f}s - Error: {str(e)}")
         return False
 
-def get_table_row_count(conn, table_name):
-    try:
-        result = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
-        return result[0] if result else 0
-    except:
-        return 0
-
 def process_parquet_file_batch(parquet_files_info):
     """Process multiple parquet files in a batch"""
     conn = get_thread_connection()
@@ -97,7 +90,6 @@ def process_parquet_file(conn, parquet_path, table_name, file_type):
     create_main = f"CREATE TABLE IF NOT EXISTS {table_name} AS SELECT * FROM read_parquet('{parquet_path}')"
     
     if execute_with_timing(conn, create_main, f"Creating main table {table_name}"):
-        # main_rows = get_table_row_count(conn, table_name)
         logger.info(f"Main table {table_name} created")
         return True
 
@@ -115,6 +107,8 @@ def get_duckdb_connection():
     conn.execute("SET max_memory='20GB'")
     conn.execute("SET checkpoint_threshold='2GB'")
     conn.execute("SET temp_directory='/tmp'")
+    
+    conn.execute("SET force_compression='zstd'")
     
     logger.info(f"DuckDB connection established - Duration: {time.time() - start_time:.2f}s")
     
@@ -135,11 +129,12 @@ def get_duckdb_connection():
     exchanges = [d for d in os.listdir(DATA_DIR) if os.path.isdir(f"{DATA_DIR}/{d}")]
     logger.info(f"Found {len(exchanges)} exchanges: {exchanges}")
     
-    batch_size = 20
+    batch_size = 10000
     file_batch = []
+    checkpoint_counter = 0
     
     for exchange in exchanges:
-        if exchange != 'BSE':
+        if exchange == 'NSE':
             exchange_start = time.time()
             logger.info(f"=== Processing Exchange: {exchange} ===")
             exchange_path = f"{DATA_DIR}/{exchange}"
@@ -184,7 +179,7 @@ def get_duckdb_connection():
                     logger.info(f"Found {len(underlyings)} underlyings in {exchange}/{instrument}: {underlyings}")
                     
                     for underlying in underlyings:
-                        if underlying != 'MIDCPNIFTY' and underlying != 'BANKNIFTY':
+                        if underlying == 'BANKNIFTY':
                             underlying_start = time.time()
                             logger.info(f"Processing Options Underlying: {underlying}")
                             underlying_dir = f"{instrument_path}/{underlying}"
@@ -228,8 +223,11 @@ def get_duckdb_connection():
                                             successful_files += results['successful']
                                             failed_files += results['failed']
                                             file_batch = []
+                                            checkpoint_counter += 1
                                             
-                                            conn.execute("CHECKPOINT")
+                                            if checkpoint_counter % 5 == 0:
+                                                conn.execute("CHECKPOINT")
+                                                logger.info(f"Checkpoint completed after {checkpoint_counter} batches")
                                     
                                     logger.info(f"Strike {strike} completed - Duration: {time.time() - strike_start:.2f}s")
                                 

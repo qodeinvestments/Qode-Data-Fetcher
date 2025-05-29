@@ -114,7 +114,7 @@ def sample_function_calls():
     print("=== Sample Function Calls ===")
     
     print("\nExample 1: Get a specific tick")
-    tick_data = get_tick("2024-05-15 09:15:00", "BSE_Index_SENSEX")
+    tick_data = get_tick("2024-08-15 09:15:00", "BSE_Options_SENSEX_20240816_73300_call")
     if not tick_data.empty:
         print("Result:")
         print(tick_data)
