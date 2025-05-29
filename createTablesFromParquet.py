@@ -2,6 +2,8 @@ import duckdb
 import os
 import logging
 import time
+import gc
+import threading
 
 DB_PATH = "qode_edw.db"
 DATA_DIR = "cold_storage"
@@ -15,6 +17,18 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+thread_local = threading.local()
+
+def get_thread_connection():
+    """Get or create a thread-local database connection"""
+    if not hasattr(thread_local, 'conn'):
+        thread_local.conn = duckdb.connect(DB_PATH)
+        thread_local.conn.execute("SET memory_limit='8GB'")
+        thread_local.conn.execute("SET threads=4")
+        thread_local.conn.execute("SET max_memory='8GB'")
+        thread_local.conn.execute("SET temp_directory='/tmp'")
+    return thread_local.conn
 
 def get_file_size(file_path):
     return os.path.getsize(file_path)
@@ -45,10 +59,42 @@ def get_table_row_count(conn, table_name):
     except:
         return 0
 
+def process_parquet_file_batch(parquet_files_info):
+    """Process multiple parquet files in a batch"""
+    conn = get_thread_connection()
+    results = {'successful': 0, 'failed': 0, 'total_size': 0}
+    
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        
+        for parquet_path, table_name, file_type, file_size in parquet_files_info:
+            logger.info(f"Processing {file_type}: {parquet_path}")
+            
+            create_main = f"CREATE TABLE IF NOT EXISTS {table_name} AS SELECT * FROM read_parquet('{parquet_path}')"
+            
+            if execute_with_timing(conn, create_main, f"Creating main table {table_name}"):
+                logger.info(f"Main table {table_name} created")
+                results['successful'] += 1
+                results['total_size'] += file_size
+            else:
+                logger.error(f"File migration failed: {parquet_path}")
+                results['failed'] += 1
+        
+        conn.execute("COMMIT")
+        
+        gc.collect()
+        
+    except Exception as e:
+        conn.execute("ROLLBACK")
+        logger.error(f"Batch processing failed: {str(e)}")
+        results['failed'] += len(parquet_files_info)
+    
+    return results
+
 def process_parquet_file(conn, parquet_path, table_name, file_type):
     logger.info(f"Processing {file_type}: {parquet_path}")
  
-    create_main = f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{parquet_path}')"
+    create_main = f"CREATE TABLE IF NOT EXISTS {table_name} AS SELECT * FROM read_parquet('{parquet_path}')"
     
     if execute_with_timing(conn, create_main, f"Creating main table {table_name}"):
         # main_rows = get_table_row_count(conn, table_name)
@@ -63,6 +109,13 @@ def get_duckdb_connection():
     logger.info(f"Initializing DuckDB connection to: {DB_PATH}")
     
     conn = duckdb.connect(DB_PATH)
+    
+    conn.execute("SET memory_limit='20GB'")
+    conn.execute("SET threads=16")
+    conn.execute("SET max_memory='20GB'")
+    conn.execute("SET checkpoint_threshold='2GB'")
+    conn.execute("SET temp_directory='/tmp'")
+    
     logger.info(f"DuckDB connection established - Duration: {time.time() - start_time:.2f}s")
     
     if not os.path.exists(DATA_DIR):
@@ -81,6 +134,9 @@ def get_duckdb_connection():
     
     exchanges = [d for d in os.listdir(DATA_DIR) if os.path.isdir(f"{DATA_DIR}/{d}")]
     logger.info(f"Found {len(exchanges)} exchanges: {exchanges}")
+    
+    batch_size = 20
+    file_batch = []
     
     for exchange in exchanges:
         if exchange != 'BSE':
@@ -164,19 +220,16 @@ def get_duckdb_connection():
                                         
                                         table_name = f"market_data.{exchange}_{instrument}_{underlying}_{expiry}_{strike}_{option_type}"
                                         
-                                        # result = conn.execute(f"""
-                                        #     SELECT COUNT(*) 
-                                        #     FROM information_schema.tables 
-                                        #     WHERE table_name = '{table_name.replace('market_data.', '')}'
-                                        # """).fetchone()
-
-                                        # if result[0] > 0:
-                                        #     existing_files += 1
-                                        # else:
-                                        if process_parquet_file(conn, parquet_path, table_name, "Option"):
-                                            successful_files += 1
-                                        else:
-                                            failed_files += 1
+                                        file_batch.append((parquet_path, table_name, "Option", file_size))
+                                        total_files += 1
+                                        
+                                        if len(file_batch) >= batch_size:
+                                            results = process_parquet_file_batch(file_batch)
+                                            successful_files += results['successful']
+                                            failed_files += results['failed']
+                                            file_batch = []
+                                            
+                                            conn.execute("CHECKPOINT")
                                     
                                     logger.info(f"Strike {strike} completed - Duration: {time.time() - strike_start:.2f}s")
                                 
@@ -214,6 +267,13 @@ def get_duckdb_connection():
                 logger.info(f"Instrument {instrument} completed - Duration: {time.time() - instrument_start:.2f}s")
             
             logger.info(f"Exchange {exchange} completed - Duration: {time.time() - exchange_start:.2f}s")
+    
+    if file_batch:
+        results = process_parquet_file_batch(file_batch)
+        successful_files += results['successful']
+        failed_files += results['failed']
+    
+    conn.execute("CHECKPOINT")
     
     migration_duration = time.time() - start_time
     logger.info(f"=== MIGRATION SUMMARY ===")
