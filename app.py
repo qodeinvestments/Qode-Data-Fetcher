@@ -9,12 +9,10 @@ from modules.db_info import render_db_info
 
 st.set_page_config(
     page_title="Qode Data Fetcher",
-    page_icon="Q",
     layout="wide"
 )
 
 def main():
-    os.makedirs("query_history", exist_ok=True)
     os.makedirs("query_logs", exist_ok=True)
     
     init_auth()

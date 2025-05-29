@@ -2,10 +2,10 @@ import duckdb
 import time
 from datetime import datetime
 
-DB_PATH = "qode_engine_data.db"
+DB_PATH = "qode_edw.db"
 
 try:
-    conn = duckdb.connect(DB_PATH)
+    conn = duckdb.connect(DB_PATH, read_only=True)
 except Exception as e:
     print(f"Error connecting to database: {e}")
 

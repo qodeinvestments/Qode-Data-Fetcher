@@ -13,3 +13,5 @@ torch
 auto-gptq
 optimum
 openpyxl
+truedata-ws
+python-dotenv
