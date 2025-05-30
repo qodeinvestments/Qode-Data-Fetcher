@@ -1,15 +1,12 @@
 venv/
 cold_storage/
-query_history/
-query_logs/
 __pycache__/
 
 *.db
-
+*.wal
 *.sql
 
 .env
 
 *.log
-
-*.wal
+query_logs.jsonl
