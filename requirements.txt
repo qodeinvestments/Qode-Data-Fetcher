@@ -11,3 +11,5 @@ optimum
 openpyxl
 truedata-ws
 python-dotenv
+streamlit-lightweight-charts
+streamlit-option-menu
