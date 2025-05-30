@@ -12,16 +12,15 @@ def data_explorer(query_engine):
     
     **Examples:**
     - **Index:** `NSE_Index_NIFTY`, `BSE_Index_SENSEX`
-    - **Options:** `NSE_Options_NIFTY_20240125_21000_CE`, `BSE_Options_BANKNIFTY_20240201_45000_PE`
-    - **Futures:** `NSE_Futures_NIFTY_I`, `MCX_Futures_GOLD_II`, `NCDEX_Futures_WHEAT_III`
+    - **Options:** `NSE_Options_NIFTY_20240125_21000_call`, `BSE_Options_BANKNIFTY_20240201_45000_put`
+    - **Futures:** `NSE_Futures_NIFTY`, `BSE_Futures_BANKEX`
     - **Stocks:** `NSE_Stocks_RELIANCE`, `BSE_Stocks_TCS`
     
     **Parameter Guide:**
-    - **Exchange:** NSE, BSE, MCX, NCDEX, etc.
+    - **Exchange:** NSE, BSE, CBOE, etc.
     - **Instrument:** Index, Options, Futures, Stocks
-    - **Underlying:** NIFTY, BANKNIFTY, SENSEX, stock symbols, commodity names
-    - **Options Additional:** YYYYMMDD (expiry), strike price, CE/PE (call/put)
-    - **Futures Additional:** I/II/III (delivery cycles - near/middle/far month)
+    - **Underlying:** NIFTY, BANKNIFTY, SENSEX, stock symbols
+    - **Options Additional:** YYYYMMDD (expiry), strike price, (call/put)
     """)
     
     st.markdown("---")

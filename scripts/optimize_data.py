@@ -1,5 +1,4 @@
 import duckdb
-import os
 
 DB_PATH = "qode_edw.db"
 DATA_DIR = "cold_storage"
