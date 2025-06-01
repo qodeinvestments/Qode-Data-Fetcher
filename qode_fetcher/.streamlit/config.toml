@@ -1,0 +1,8 @@
+[server]
+runOnSave = true
+port = 443
+enableCORS = true
+enableXsrfProtection = true
+maxUploadSize = 1024
+maxMessageSize = 1024
+enableStaticServing = true

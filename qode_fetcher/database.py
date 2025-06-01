@@ -6,7 +6,7 @@ import os
 
 def get_database_connection():
     try:
-        conn = duckdb.connect("qode_edw.db", read_only=True)
+        conn = duckdb.connect("~/../mnt/disk2/qode_edw.db", read_only=True)
         return conn
     except Exception as e:
         st.error(f"Failed to connect to database: {e}")
