@@ -3,6 +3,7 @@ import pandas as pd
 import duckdb
 import datetime
 import os
+from typing import List
 
 def get_database_connection():
     try:
@@ -22,6 +23,91 @@ def get_database_info():
         return 0, None
     except:
         return 0, None
+
+def get_all_tables(conn) -> List[str]:
+    """Get all table names from the market_data schema with caching"""
+    try:
+        if conn is None:
+            return []
+        
+        query = """
+        SELECT table_name 
+        FROM information_schema.tables 
+        ORDER BY table_name
+        """
+        result = conn.execute(query).fetchdf()
+        return result['table_name'].tolist()
+    except Exception as e:
+        st.error(f"Error fetching table names: {e}")
+        return []
+
+def fuzzy_search_tables(all_tables: List[str], search_term: str, limit: int = 50) -> List[str]:
+    """
+    Perform fuzzy search on table names with multiple strategies for better matching
+    """
+    if not search_term or not all_tables:
+        return all_tables[:limit]
+    
+    search_term = search_term.upper().strip()
+    
+    exact_matches = []
+    starts_with_matches = []
+    contains_matches = []
+    fuzzy_matches = []
+    
+    for table in all_tables:
+        table_upper = table.upper()
+        
+        if table_upper == search_term:
+            exact_matches.append(table)
+        elif table_upper.startswith(search_term):
+            starts_with_matches.append(table)
+        elif search_term in table_upper:
+            contains_matches.append(table)
+        else:
+            search_parts = search_term.replace('_', ' ').split()
+            if len(search_parts) > 1:
+                if all(part in table_upper for part in search_parts):
+                    fuzzy_matches.append(table)
+            else:
+
+                match_score = sum(1 for char in search_term if char in table_upper)
+                if match_score >= len(search_term) * 0.7:
+                    fuzzy_matches.append(table)
+    
+    combined_results = exact_matches + starts_with_matches + contains_matches + fuzzy_matches
+    
+    seen = set()
+    unique_results = []
+    for table in combined_results:
+        if table not in seen:
+            seen.add(table)
+            unique_results.append(table)
+            if len(unique_results) >= limit:
+                break
+    
+    return unique_results
+
+def search_tables_by_pattern(all_tables: List[str], exchange: str = "", 
+                           instrument: str = "", underlying: str = "", limit: int = 50) -> List[str]:
+    """
+    Search tables by specific pattern components
+    """
+    filtered_tables = all_tables
+    
+    if exchange:
+        exchange_upper = exchange.upper()
+        filtered_tables = [t for t in filtered_tables if t.upper().startswith(exchange_upper)]
+    
+    if instrument:
+        instrument_upper = instrument.upper()
+        filtered_tables = [t for t in filtered_tables if instrument_upper in t.upper()]
+    
+    if underlying:
+        underlying_upper = underlying.upper()
+        filtered_tables = [t for t in filtered_tables if underlying_upper in t.upper()]
+    
+    return filtered_tables[:limit]
 
 def get_table_metadata(conn, table_name):
     try:
@@ -61,12 +147,26 @@ def get_table_metadata(conn, table_name):
                 LIMIT 100
             ),
             time_diffs AS (
-                SELECT EXTRACT(EPOCH FROM (timestamp - prev_timestamp)) as diff_seconds
+                SELECT 
+                    timestamp,
+                    prev_timestamp,
+                    EXTRACT(EPOCH FROM (timestamp - prev_timestamp)) as diff_seconds
                 FROM ordered_data
                 WHERE prev_timestamp IS NOT NULL
+            ),
+            adjusted_diffs AS (
+                SELECT 
+                    CASE 
+                        WHEN diff_seconds = 172800 
+                             AND EXTRACT(DOW FROM prev_timestamp) = 5 
+                             AND EXTRACT(DOW FROM timestamp) = 1
+                        THEN 86400
+                        ELSE diff_seconds
+                    END as adj_diff_seconds
+                FROM time_diffs
             )
-            SELECT ROUND(AVG(diff_seconds)) as avg_interval_seconds
-            FROM time_diffs
+            SELECT ROUND(AVG(adj_diff_seconds)) as avg_interval_seconds
+            FROM adjusted_diffs
             """
             
             freq_result = conn.execute(freq_query).fetchdf()
@@ -84,8 +184,12 @@ def get_table_metadata(conn, table_name):
                     frequency = "1day"
                 elif avg_seconds < 60:
                     frequency = f"{avg_seconds}s"
+                elif avg_seconds < 3600:
+                    mins = avg_seconds / 60
+                    frequency = f"{mins:.2f} mins"
                 else:
-                    frequency = f"{avg_seconds}s"
+                    days = avg_seconds / 86400
+                    frequency = f"{days:.2f} days"
         except Exception as freq_error:
             frequency = "Unknown"
         

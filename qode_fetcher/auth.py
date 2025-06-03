@@ -121,6 +121,6 @@ def show_user_info_sidebar():
                 st.write(f"Logged in as {user_info['first_name']} {user_info['last_name']}")
                 st.write(f"{st.session_state['email']}")
                 
-                if st.button("🚪 Logout", use_container_width=True):
+                if st.button("Logout", use_container_width=True):
                     logout()
                     st.rerun()

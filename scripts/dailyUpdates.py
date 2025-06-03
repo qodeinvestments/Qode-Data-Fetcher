@@ -1,375 +1,284 @@
-from truedata_ws.websocket.TD import TD
 import requests
-import logging
-import datetime
-import os
-import pandas as pd
-import duckdb
+from datetime import datetime, timedelta
 import time
-from pathlib import Path
-from dotenv import load_dotenv
-import gc
+import direct_redis
+import pandas as pd
+from io import StringIO
+import concurrent.futures
+import duckdb
+import os
+import logging
 import threading
-from typing import Dict, Optional
 
-load_dotenv()
-
-td_login_id = os.getenv("TRUEDATA_LOGIN_ID")
-td_password = os.getenv("TRUEDATA_LOGIN_PWD")
-
-if not td_login_id or not td_password:
-    raise ValueError("TrueData credentials not found in environment variables")
-
-COLD_STORAGE_PATH = "cold_storage"
-DB_PATH = "qode_edw.db"
-LOG_FILE = f"daily_update_{datetime.date.today().strftime('%Y%m%d')}.log"
-
-UNDERLYINGS = ['NIFTY', 'FINNIFTY', 'BANKNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']
-EXCHANGES = {
-    'NIFTY': 'NSE',
-    'FINNIFTY': 'NSE', 
-    'BANKNIFTY': 'NSE',
-    'MIDCPNIFTY': 'NSE',
-    'SENSEX': 'BSE',
-    'BANKEX': 'BSE'
-}
-
-INDEX_SYMBOLS = {
-    'NIFTY': 'NIFTYSPOT',
-    'FINNIFTY': 'FINNIFTYSPOT',
-    'BANKNIFTY': 'BANKNIFTYSPOT',
-    'MIDCPNIFTY': 'MIDCPNIFTYSPOT',
-    'SENSEX': 'SENSEXSPOT',
-    'BANKEX': 'BANKEXSPOT'
-}
-
-FUTURES_SYMBOLS = {
-    'NIFTY': ['NIFTY-I', 'NIFTY-II', 'NIFTY-III'],
-    'FINNIFTY': ['FINNIFTY-I'],
-    'BANKNIFTY': ['BANKNIFTY-I', 'BANKNIFTY-II', 'BANKNIFTY-III'],
-    'MIDCPNIFTY': ['MIDCPNIFTY-I'],
-    'SENSEX': ['SENSEX-I', 'SENSEX-II', 'SENSEX-III'],
-    'BANKEX': ['BANKEX-I', 'BANKEX-II', 'BANKEX-III']
-}
+DB_PATH = "/mnt/disk2/qode_edw.db"
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        logging.FileHandler('data_ingestion.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
+r = direct_redis.DirectRedis(host='localhost', port=6379, db=0)
+tdsymbolidTOsymbol = r.get('tdsymbolidTOsymbol')
+
 thread_local = threading.local()
 
-class DailyDataUpdater:
-    def __init__(self):
-        self.td_obj = TD(td_login_id, td_password, live_port=None,
-                        log_level=logging.WARNING, log_format="%(message)s")
-        self.today = datetime.date.today()
-        self.yesterday = self.today - datetime.timedelta(days=1)
+def get_thread_connection():
+    """Get or create a thread-local database connection"""
+    if not hasattr(thread_local, 'conn'):
+        thread_local.conn = duckdb.connect(DB_PATH)
         
-        Path(COLD_STORAGE_PATH).mkdir(exist_ok=True)
-        for exchange in set(EXCHANGES.values()):
-            for instrument_type in ['Index', 'Futures', 'Options']:
-                Path(f"{COLD_STORAGE_PATH}/{exchange}/{instrument_type}").mkdir(parents=True, exist_ok=True)
+    return thread_local.conn
+
+def get_main_connection():
+    """Get main database connection for schema operations"""
+    conn = duckdb.connect(DB_PATH)
+
+    return conn
+
+def create_table_if_not_exists(conn, table_name):
+    """Create table if it doesn't exist with the required schema"""
+    create_table_sql = f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        timestamp TIMESTAMP,
+        symbolid INTEGER,
+        symbol VARCHAR,
+        o DOUBLE,
+        h DOUBLE,
+        l DOUBLE,
+        c DOUBLE,
+        v BIGINT,
+        oi BIGINT,
+        PRIMARY KEY (timestamp, symbolid)
+    );
+    """
     
-    def get_thread_connection(self) -> duckdb.DuckDBPyConnection:
-        """Get or create a thread-local database connection"""
-        if not hasattr(thread_local, 'conn'):
-            thread_local.conn = duckdb.connect(DB_PATH)
-            thread_local.conn.execute("SET memory_limit='8GB'")
-            thread_local.conn.execute("SET threads=4")
-            thread_local.conn.execute("SET max_memory='8GB'")
-            thread_local.conn.execute("SET temp_directory='/tmp'")
-            thread_local.conn.execute("CREATE SCHEMA IF NOT EXISTS market_data")
-        return thread_local.conn
-
-    def get_option_chain_symbols(self, underlying: str, expiry: str = 'YYYYMMDD') -> pd.DataFrame:
-        """Get all symbols in option chain for given underlying and expiry"""
-        try:
-            url = f"https://api.truedata.in/getOptionChain?user={td_login_id}&password={td_password}&symbol={underlying}&expiry={expiry}"
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            return pd.DataFrame(data.get('Records', []))
-        except Exception as e:
-            logger.error(f"Error fetching option chain for {underlying}-{expiry}: {e}")
-            return pd.DataFrame()
-
-    def get_daily_data(self, symbol: str, end_date: Optional[datetime.date] = None) -> pd.DataFrame:
-        """Get daily historical data for a symbol"""
-        try:
-            end_time = None
-            if end_date:
-                end_time = datetime.datetime.combine(end_date, datetime.time(15, 30))
-            
-            data = self.td_obj.get_historic_data(symbol, duration='1 D', end_time=end_time)
-            if not data:
-                return pd.DataFrame(columns=['timestamp', 'o', 'h', 'l', 'c', 'v', 'oi'])
-            
-            df = pd.DataFrame(data)
-            df.columns = ['timestamp', 'o', 'h', 'l', 'c', 'v', 'oi']
-            return df
-        except Exception as e:
-            logger.error(f"Error fetching data for {symbol}: {e}")
-            return pd.DataFrame(columns=['timestamp', 'o', 'h', 'l', 'c', 'v', 'oi'])
-
-    def save_to_parquet(self, df: pd.DataFrame, file_path: str) -> bool:
-        """Save dataframe to parquet file, appending if file exists"""
-        try:
-            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-            
-            if os.path.exists(file_path):
-                # Load existing data and append
-                existing_df = pd.read_parquet(file_path)
-                combined_df = pd.concat([existing_df, df]).drop_duplicates('timestamp').sort_values('timestamp')
-                combined_df.to_parquet(file_path, index=False)
-                logger.info(f"Appended {len(df)} rows to existing {file_path}")
-            else:
-                # Create new file
-                df.to_parquet(file_path, index=False)
-                logger.info(f"Created new parquet file {file_path} with {len(df)} rows")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error saving to parquet {file_path}: {e}")
-            return False
-
-    def update_duckdb_table(self, parquet_path: str, table_name: str) -> bool:
-        """Update DuckDB table from parquet file"""
-        try:
-            conn = self.get_thread_connection()
-            
-            # Check if table exists
-            table_exists = conn.execute(
-                f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{table_name.split('.')[-1]}' AND table_schema = 'market_data'"
-            ).fetchone()[0] > 0
-            
-            if table_exists:
-                # Insert new data, avoiding duplicates
-                query = f"""
-                INSERT INTO {table_name}
-                SELECT * FROM read_parquet('{parquet_path}')
-                WHERE timestamp NOT IN (SELECT timestamp FROM {table_name})
-                """
-            else:
-                # Create new table
-                query = f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{parquet_path}')"
-            
-            conn.execute(query)
-            row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-            logger.info(f"Updated DuckDB table {table_name} - Total rows: {row_count}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Error updating DuckDB table {table_name}: {e}")
-            return False
-
-    def update_indices(self) -> Dict[str, int]:
-        """Update index data"""
-        logger.info("Starting index data update...")
-        results = {'success': 0, 'failed': 0}
-        
-        for underlying, symbol in INDEX_SYMBOLS.items():
-            try:
-                logger.info(f"Processing index: {underlying} ({symbol})")
-                
-                # Get data
-                df = self.get_daily_data(symbol)
-                if df.empty:
-                    logger.warning(f"No data received for index {symbol}")
-                    results['failed'] += 1
-                    continue
-                
-                # Save to parquet
-                exchange = EXCHANGES[underlying]
-                parquet_path = f"{COLD_STORAGE_PATH}/{exchange}/Index/{underlying}.parquet"
-                
-                if self.save_to_parquet(df, parquet_path):
-                    # Update DuckDB
-                    table_name = f"market_data.{exchange}_Index_{underlying}"
-                    if self.update_duckdb_table(parquet_path, table_name):
-                        results['success'] += 1
-                    else:
-                        results['failed'] += 1
-                else:
-                    results['failed'] += 1
-                    
-            except Exception as e:
-                logger.error(f"Error processing index {underlying}: {e}")
-                results['failed'] += 1
-        
-        return results
-
-    def update_futures(self) -> Dict[str, int]:
-        """Update futures data"""
-        logger.info("Starting futures data update...")
-        results = {'success': 0, 'failed': 0}
-        
-        for underlying, symbols in FUTURES_SYMBOLS.items():
-            exchange = EXCHANGES[underlying]
-            
-            for symbol in symbols:
-                try:
-                    logger.info(f"Processing future: {symbol}")
-                    
-                    # Get data
-                    df = self.get_daily_data(symbol)
-                    if df.empty:
-                        logger.warning(f"No data received for future {symbol}")
-                        results['failed'] += 1
-                        continue
-                    
-                    # Save to parquet
-                    parquet_path = f"{COLD_STORAGE_PATH}/{exchange}/Futures/{underlying}/{symbol}.parquet"
-                    
-                    if self.save_to_parquet(df, parquet_path):
-                        # Update DuckDB
-                        table_name = f"market_data.{exchange}_Futures_{underlying}_{symbol}"
-                        if self.update_duckdb_table(parquet_path, table_name):
-                            results['success'] += 1
-                        else:
-                            results['failed'] += 1
-                    else:
-                        results['failed'] += 1
-                        
-                except Exception as e:
-                    logger.error(f"Error processing future {symbol}: {e}")
-                    results['failed'] += 1
-        
-        return results
-
-    def update_options(self) -> Dict[str, int]:
-        """Update options data"""
-        logger.info("Starting options data update...")
-        results = {'success': 0, 'failed': 0}
-        
-        # Get expiry dates for next 2 months
-        start_date = self.today
-        end_date = self.today + datetime.timedelta(days=60)
-        
-        for underlying in UNDERLYINGS:
-            logger.info(f"Processing options for {underlying}")
-            exchange = EXCHANGES[underlying]
-            
-            # Get option chain to find current expiries
-            option_chain = self.get_option_chain_symbols(underlying)
-            if option_chain.empty:
-                logger.warning(f"No option chain data for {underlying}")
-                continue
-            
-            # Process each unique expiry
-            expiries = option_chain[1].apply(lambda x: x.split('_')[1] if '_' in str(x) else '').unique()
-            
-            for expiry_str in expiries:
-                if not expiry_str or len(expiry_str) != 8:
-                    continue
-                
-                try:
-                    expiry_date = datetime.datetime.strptime(expiry_str, '%Y%m%d').date()
-                    if expiry_date < start_date or expiry_date > end_date:
-                        continue
-                    
-                    logger.info(f"Processing options expiry: {expiry_str} for {underlying}")
-                    
-                    # Get symbols for this expiry
-                    expiry_symbols = self.get_option_chain_symbols(underlying, expiry_str)
-                    if expiry_symbols.empty:
-                        continue
-                    
-                    symbol_list = expiry_symbols[1].tolist() if 1 in expiry_symbols.columns else []
-                    
-                    for symbol in symbol_list[:50]:  # Limit to avoid overwhelming
-                        try:
-                            # Parse symbol to extract strike and option type
-                            parts = symbol.split('_')
-                            if len(parts) < 3:
-                                continue
-                            
-                            strike = parts[2]
-                            option_type = parts[3] if len(parts) > 3 else 'unknown'
-                            option_type_clean = 'call' if option_type == 'CE' else 'put' if option_type == 'PE' else option_type
-                            
-                            # Get data
-                            df = self.get_daily_data(symbol, expiry_date)
-                            if df.empty:
-                                continue
-                            
-                            # Save to parquet
-                            parquet_path = f"{COLD_STORAGE_PATH}/{exchange}/Options/{underlying}/{expiry_str}/{strike}/{symbol}_{option_type_clean}.parquet"
-                            
-                            if self.save_to_parquet(df, parquet_path):
-                                # Update DuckDB
-                                table_name = f"market_data.{exchange}_Options_{underlying}_{expiry_str}_{strike}_{option_type_clean}"
-                                if self.update_duckdb_table(parquet_path, table_name):
-                                    results['success'] += 1
-                                else:
-                                    results['failed'] += 1
-                            else:
-                                results['failed'] += 1
-                                
-                        except Exception as e:
-                            logger.error(f"Error processing option {symbol}: {e}")
-                            results['failed'] += 1
-                
-                except Exception as e:
-                    logger.error(f"Error processing expiry {expiry_str} for {underlying}: {e}")
-                    continue
-        
-        return results
-
-    def run_daily_update(self):
-        """Run the complete daily update process"""
-        start_time = time.time()
-        logger.info(f"Starting daily market data update for {self.today}")
-        
-        total_results = {'success': 0, 'failed': 0}
-        
-        try:
-            index_results = self.update_indices()
-            total_results['success'] += index_results['success']
-            total_results['failed'] += index_results['failed']
-            logger.info(f"Index update completed - Success: {index_results['success']}, Failed: {index_results['failed']}")
-            
-            futures_results = self.update_futures()
-            total_results['success'] += futures_results['success']
-            total_results['failed'] += futures_results['failed']
-            logger.info(f"Futures update completed - Success: {futures_results['success']}, Failed: {futures_results['failed']}")
-            
-            options_results = self.update_options()
-            total_results['success'] += options_results['success']
-            total_results['failed'] += options_results['failed']
-            logger.info(f"Options update completed - Success: {options_results['success']}, Failed: {options_results['failed']}")
-            
-            conn = self.get_thread_connection()
-            conn.execute("CHECKPOINT")
-            gc.collect()
-            
-        except Exception as e:
-            logger.error(f"Critical error during daily update: {e}")
-        
-        finally:
-            duration = time.time() - start_time
-            logger.info(f"=== DAILY UPDATE SUMMARY ===")
-            logger.info(f"Date: {self.today}")
-            logger.info(f"Total successful updates: {total_results['success']}")
-            logger.info(f"Total failed updates: {total_results['failed']}")
-            logger.info(f"Success rate: {(total_results['success']/(total_results['success']+total_results['failed'])*100):.1f}%" if (total_results['success']+total_results['failed']) > 0 else "No updates processed")
-            logger.info(f"Total duration: {duration:.2f}s")
-
-
-def main():
-    """Main function to run daily update"""
     try:
-        updater = DailyDataUpdater()
-        updater.run_daily_update()
+        conn.execute(create_table_sql)
+        logger.info(f"Table {table_name} created or verified")
+        return True
     except Exception as e:
-        logger.error(f"Fatal error in main: {e}")
+        logger.error(f"Failed to create table {table_name}: {str(e)}")
+        return False
+
+def upsert_data_to_duckdb(conn, df, segment):
+    """Insert or update data in DuckDB table"""
+    if df.empty:
+        logger.warning("Empty dataframe received")
+        return
+    
+    df = df.rename(columns={'open': 'o', 'high': 'h', 'low': 'l', 'close': 'c', 'volume': 'v'})
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    
+    df['symbol'] = df['symbolid'].map(lambda x: tdsymbolidTOsymbol.get(str(x), f"UNKNOWN_{x}"))
+    
+    table_name = f"market_data.{segment}_data"
+    
+    # Create table if it doesn't exist
+    if not create_table_if_not_exists(conn, table_name):
+        logger.error(f"Failed to create table {table_name}")
+        return
+    
+    try:
+        # Begin transaction
+        conn.execute("BEGIN TRANSACTION")
+        
+        # Delete existing records for the same timestamps and symbolids to handle overwrites
+        timestamps_str = "'" + "','".join(df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()) + "'"
+        symbolids_str = ','.join(df['symbolid'].astype(str).tolist())
+        
+        delete_sql = f"""
+        DELETE FROM {table_name} 
+        WHERE timestamp IN ({timestamps_str}) 
+        AND symbolid IN ({symbolids_str})
+        """
+        
+        conn.execute(delete_sql)
+        logger.info(f"Deleted existing records for timestamps and symbols in {table_name}")
+        
+        insert_sql = f"""
+        INSERT INTO {table_name} (timestamp, symbolid, symbol, o, h, l, c, v, oi)
+        SELECT 
+            timestamp,
+            symbolid,
+            symbol,
+            o,
+            h,
+            l,
+            c,
+            v,
+            oi
+        FROM df
+        """
+        
+        conn.execute(insert_sql)
+        
+        conn.execute("COMMIT")
+        
+        logger.info(f"Successfully upserted {len(df)} records to {table_name}")
+        
+    except Exception as e:
+        conn.execute("ROLLBACK")
+        logger.error(f"Failed to upsert data to {table_name}: {str(e)}")
         raise
 
+def store_in_duckdb(df, segment, max_workers=4):
+    """Store dataframe in DuckDB with parallel processing for large datasets"""
+    print(f'df length : {len(df)}, columns : {df.columns}')
+    
+    if df.empty:
+        logger.warning("Empty dataframe received")
+        return
+    
+    
+    if len(df) <= 10000:
+        conn = get_thread_connection()
+        upsert_data_to_duckdb(conn, df, segment)
+        return
+    
+    chunk_size = max(1000, len(df) // max_workers)
+    chunks = [df[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
+    
+    def process_chunk(chunk_data):
+        conn = get_thread_connection()
+        upsert_data_to_duckdb(conn, chunk_data, segment)
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+        concurrent.futures.wait(futures)
+    
+    logger.info(f"Completed processing {len(chunks)} chunks for segment {segment}")
+
+def generate_timestamps(start_time_str, end_time_str, time_format="%y%m%dT%H:%M"):
+    start_time = datetime.strptime(start_time_str, time_format)
+    end_time = datetime.strptime(end_time_str, time_format)
+    
+    timestamps = []
+    
+    current_time = start_time
+    while current_time <= end_time:
+        timestamps.append(current_time.strftime(time_format))
+        current_time += timedelta(minutes=1)
+    
+    return timestamps
+
+def get_auth_token(username, password):
+    url = "https://auth.truedata.in/token"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    data = {
+        "username": username,
+        "password": password,
+        "grant_type": "password"
+    }
+    
+    response = requests.post(url, headers=headers, data=data)
+    
+    if response.status_code == 200:
+        token_data = response.json()
+        return token_data.get("access_token")
+    else:
+        raise Exception("Failed to fetch the token. Status code: {}".format(response.status_code))
+
+def fetch_data_for_segment(token, segment, timestamps):
+    for timestamp in timestamps:
+        url = f"https://history.truedata.in/getAllBars?segment={segment}&timestamp={timestamp}&response=csv"
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        try:
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                csv_content = StringIO(response.text)
+                data = pd.read_csv(csv_content)
+                
+                if not data.empty:
+                    store_in_duckdb(data, segment)
+                    print(f"Data for segment {segment} and timestamp {timestamp} saved to DuckDB")
+                else:
+                    print(f"No data received for segment {segment} and timestamp {timestamp}")
+            else:
+                print(f"Failed to fetch data for segment {segment} and timestamp {timestamp}. Status code: {response.status_code}")
+        
+        except Exception as e:
+            logger.error(f"Error processing segment {segment} timestamp {timestamp}: {str(e)}")
+        
+        time.sleep(2)
+
+def fetch_data(token, segments, timestamps):
+    for segment in segments:
+        logger.info(f"Starting data fetch for segment: {segment}")
+        fetch_data_for_segment(token, segment, timestamps)
+        logger.info(f"Completed data fetch for segment: {segment}")
+
+def initialize_database():
+    """Initialize database and create necessary schemas"""
+    logger.info(f"Initializing DuckDB database at: {DB_PATH}")
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
+    conn = get_main_connection()
+    logger.info("Database initialized successfully")
+    return conn
+
+def get_table_info(segment):
+    """Get information about existing tables for a segment"""
+    conn = get_thread_connection()
+    table_name = f"market_data.{segment}_data"
+    
+    try:
+        result = conn.execute(f"""
+        SELECT COUNT(*) as row_count, 
+               MIN(timestamp) as min_timestamp,
+               MAX(timestamp) as max_timestamp
+        FROM {table_name}
+        """).fetchone()
+        
+        if result:
+            logger.info(f"Table {table_name} contains {result[0]} rows, "
+                       f"from {result[1]} to {result[2]}")
+        
+    except Exception as e:
+        logger.info(f"Table {table_name} does not exist or is empty")
 
 if __name__ == "__main__":
-    main()
+    # Initialize database
+    initialize_database()
+    
+    dt_start = datetime.now().replace(hour=9, minute=15)
+    dt_end = datetime.now().replace(hour=15, minute=30)
+    
+    start_time = dt_start.strftime("%y%m%dT%H:%M")
+    end_time = dt_end.strftime("%y%m%dT%H:%M")
+    
+    username = "tdwsf575"
+    password = "vidhi@575"
+    
+    try:
+        token = get_auth_token(username, password)
+        logger.info("Authentication successful")
+        
+        segments = ['bsefo']  # Example segments
+        # Available segments: 'eq', 'bseeq', 'bseind', 'bsefo', 'ind', 'fo'
+        
+        # Show current table information
+        for segment in segments:
+            get_table_info(segment)
+        
+        timestamps = generate_timestamps(start_time, end_time)
+        logger.info(f"Generated {len(timestamps)} timestamps from {start_time} to {end_time}")
+        
+        fetch_data(token, segments, timestamps)
+        
+        # Show final table information
+        logger.info("=== FINAL TABLE STATISTICS ===")
+        for segment in segments:
+            get_table_info(segment)
+        
+    except Exception as e:
+        logger.error(f"Script execution failed: {str(e)}")
+        raise
