@@ -41,7 +41,7 @@ def main():
                     "font-size": "16px",
                     "text-align": "left",
                     "margin": "0px",
-                    "--hover-color": "#121111"
+                    "--hover-color": "#8D8D8D"
                 },
                 "nav-link-selected": {"background-color": "#ff4b4b"},
             }
