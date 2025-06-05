@@ -50,7 +50,7 @@ def main():
         st.markdown("---")
         db_size, db_modified = get_database_info()
         if db_size > 0:
-            st.write("Database Size", f"{db_size:.2f} GB")
+            st.write("Database Size: ", f"{db_size:.2f} GB")
             if db_modified:
                 st.write(f"Last Updated: {db_modified.strftime('%Y-%m-%d %H:%M')}")
         

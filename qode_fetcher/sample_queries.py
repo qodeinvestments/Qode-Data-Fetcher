@@ -97,9 +97,8 @@ def get_sample_queries():
         JOIN futures_data f ON i.day = f.day
         ORDER BY i.day;""",
         
-        "Stock aggregation with symbol handling": """SELECT
+        "Stock aggregation": """SELECT
         date_trunc('day', timestamp) AS day,
-        (array_agg(symbol))[1] AS symbol,
         (array_agg(o ORDER BY timestamp))[1] AS open,
         MAX(h) AS high,
         MIN(l) AS low,
