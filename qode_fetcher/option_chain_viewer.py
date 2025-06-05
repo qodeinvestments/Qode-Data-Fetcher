@@ -484,7 +484,7 @@ def create_advanced_analytics(df, spot_price):
     fig.update_layout(
         height=1200, 
         showlegend=True,
-        title_text="Advanced Option Chain Analytics",
+        title_text="Option Chain Analytics",
         title_font_size=20,
         template="plotly_white"
     )
@@ -607,7 +607,7 @@ def fetch_enhanced_option_chain(query_engine, exchange, underlying, target_datet
             )
         
         if show_charts and len(result) > 0:
-            st.markdown('<div class="section-header">Advanced Analytics</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Analytics</div>', unsafe_allow_html=True)
             
             chart_fig = create_advanced_analytics(result, spot_price)
             st.plotly_chart(chart_fig, use_container_width=True)

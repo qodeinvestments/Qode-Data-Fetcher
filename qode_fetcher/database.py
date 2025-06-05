@@ -14,7 +14,7 @@ def get_database_connection():
 
 def get_database_info():
     try:
-        db_path = "qode_edw.db"
+        db_path = "/mnt/disk2/qode_edw.db"
         if os.path.exists(db_path):
             size_bytes = os.path.getsize(db_path)
             size_gb = size_bytes / (1024**3)

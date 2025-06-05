@@ -3,7 +3,21 @@ from chart_renderer import has_candlestick_columns, render_candlestick_chart
 from sample_queries import get_sample_queries
 
 def advanced_query_editor(query_engine):
-    st.subheader("Advanced SQL Query Editor")
+    st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f2937;
+        margin-bottom: 2rem;
+        text-align: center;
+        border-bottom: 3px solid #3b82f6;
+        padding-bottom: 1rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div class="main-header">SQL Editor</div>', unsafe_allow_html=True)
     
     sample_queries = get_sample_queries()
     

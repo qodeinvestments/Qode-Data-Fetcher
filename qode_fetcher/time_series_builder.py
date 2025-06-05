@@ -5,7 +5,21 @@ from query_builder import build_query
 from chart_renderer import has_candlestick_columns, render_candlestick_chart
 
 def time_series_query_builder(query_engine):
-    st.subheader("Time Series Query Builder")
+    st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f2937;
+        margin-bottom: 2rem;
+        text-align: center;
+        border-bottom: 3px solid #3b82f6;
+        padding-bottom: 1rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div class="main-header">Time Series Query Builder</div>', unsafe_allow_html=True)
     
     exchange_options = ["NSE", "BSE", "CBOE"]
     instrument_options = ["Index", "Futures", "Stocks"]

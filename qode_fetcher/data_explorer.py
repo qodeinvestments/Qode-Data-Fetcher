@@ -40,7 +40,7 @@ def data_explorer(query_engine):
     
     st.subheader("Table Search")
     
-    search_tab, filter_tab = st.tabs(["Quick Search", "Advanced Filter"])
+    search_tab, filter_tab = st.tabs(["Quick Search", "Filter"])
     
     with search_tab:
         col1, col2 = st.columns([3, 1])
