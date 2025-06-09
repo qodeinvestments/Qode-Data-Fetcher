@@ -2,11 +2,48 @@ import streamlit as st
 import pandas as pd
 from streamlit_lightweight_charts import renderLightweightCharts
 
+def normalize_column_name(df_columns, target_names):
+    """Find column that matches any of the target names (case insensitive)"""
+    df_cols_lower = [col.lower() for col in df_columns]
+    for target in target_names:
+        if target.lower() in df_cols_lower:
+            return df_columns[df_cols_lower.index(target.lower())]
+    return None
+
 def has_candlestick_columns(df):
-    required_cols = ['timestamp', 'o', 'h', 'l', 'c']
-    return all(col in df.columns.str.lower() for col in required_cols)
+    """Check if dataframe has required columns for candlestick chart"""
+    if df.empty:
+        return False
+    
+    timestamp_variants = ['timestamp', 'time', 'date', 'datetime']
+    open_variants = ['open', 'o']
+    high_variants = ['high', 'h']
+    low_variants = ['low', 'l']
+    close_variants = ['close', 'c']
+    
+    timestamp_col = normalize_column_name(df.columns, timestamp_variants)
+    open_col = normalize_column_name(df.columns, open_variants)
+    high_col = normalize_column_name(df.columns, high_variants)
+    low_col = normalize_column_name(df.columns, low_variants)
+    close_col = normalize_column_name(df.columns, close_variants)
+    
+    return all([timestamp_col, open_col, high_col, low_col, close_col])
+
+def has_line_chart_columns(df):
+    """Check if dataframe has required columns for line chart"""
+    if df.empty:
+        return False
+    
+    timestamp_variants = ['timestamp', 'time', 'date', 'datetime']
+    price_variants = ['ltp', 'close', 'c', 'price', 'value']
+    
+    timestamp_col = normalize_column_name(df.columns, timestamp_variants)
+    price_col = normalize_column_name(df.columns, price_variants)
+    
+    return timestamp_col is not None and price_col is not None
 
 def filter_last_week(df, timestamp_col):
+    """Filter dataframe to show only last 7 days of data"""
     df[timestamp_col] = pd.to_datetime(df[timestamp_col])
     df_sorted = df.sort_values(timestamp_col, ascending=False)
     
@@ -23,14 +60,20 @@ def filter_last_week(df, timestamp_col):
     return filtered_df.sort_values(timestamp_col)
 
 def render_candlestick_chart(df):
-    df_cols = df.columns.str.lower()
-    
-    timestamp_col = next((col for col in df.columns if col.lower() == 'timestamp'), None)
-    o_col = next((col for col in df.columns if col.lower() == 'o'), None)
-    h_col = next((col for col in df.columns if col.lower() == 'h'), None)
-    l_col = next((col for col in df.columns if col.lower() == 'l'), None)
-    c_col = next((col for col in df.columns if col.lower() == 'c'), None)
-    v_col = next((col for col in df.columns if col.lower() == 'v'), None)
+    """Render candlestick chart with flexible column names"""
+    timestamp_variants = ['timestamp', 'time', 'date', 'datetime']
+    open_variants = ['open', 'o']
+    high_variants = ['high', 'h']
+    low_variants = ['low', 'l']
+    close_variants = ['close', 'c']
+    volume_variants = ['volume', 'v', 'vol']
+
+    timestamp_col = normalize_column_name(df.columns, timestamp_variants)
+    o_col = normalize_column_name(df.columns, open_variants)
+    h_col = normalize_column_name(df.columns, high_variants)
+    l_col = normalize_column_name(df.columns, low_variants)
+    c_col = normalize_column_name(df.columns, close_variants)
+    v_col = normalize_column_name(df.columns, volume_variants)
     
     if not all([timestamp_col, o_col, h_col, l_col, c_col]):
         st.error("Missing required columns for candlestick chart")
@@ -60,14 +103,14 @@ def render_candlestick_chart(df):
             'close': float(row[c_col])
         })
         
-        if v_col:
+        if v_col and pd.notna(row[v_col]):
             volume_data.append({
                 'time': ts,
                 'value': float(row[v_col])
             })
     
     chart_options = get_chart_options()
-    series = build_chart_series(chart_data, volume_data)
+    series = build_candlestick_series(chart_data, volume_data)
     
     if chart_data:
         times = [item['time'] for item in chart_data]
@@ -82,7 +125,68 @@ def render_candlestick_chart(df):
         }
     ], key="candlestick_chart")
 
+def render_line_chart(df):
+    """Render line chart for price data"""
+    timestamp_variants = ['timestamp', 'time', 'date', 'datetime']
+    price_variants = ['ltp', 'close', 'c', 'price', 'value']
+    
+    timestamp_col = normalize_column_name(df.columns, timestamp_variants)
+    price_col = normalize_column_name(df.columns, price_variants)
+    
+    if not timestamp_col or not price_col:
+        st.error("Missing required columns for line chart (timestamp and price)")
+        return
+    
+    df_filtered = filter_last_week(df, timestamp_col)
+    
+    chart_data = []
+    
+    for _, row in df_filtered.iterrows():
+        timestamp = row[timestamp_col]
+        
+        if isinstance(timestamp, str):
+            try:
+                ts = pd.to_datetime(timestamp).timestamp()
+            except:
+                ts = pd.Timestamp(timestamp).timestamp()
+        else:
+            ts = pd.Timestamp(timestamp).timestamp()
+        
+        if pd.notna(row[price_col]):
+            chart_data.append({
+                'time': ts,
+                'value': float(row[price_col])
+            })
+    
+    chart_options = get_chart_options()
+    series = build_line_series(chart_data)
+    
+    if chart_data:
+        times = [item['time'] for item in chart_data]
+        min_time = min(times)
+        max_time = max(times)
+        chart_options["timeScale"]["visibleTimeRange"] = {"from": min_time, "to": max_time}
+
+    renderLightweightCharts([
+        {
+            "chart": chart_options,
+            "series": series
+        }
+    ], key="line_chart")
+
+def render_appropriate_chart(df):
+    """Automatically choose and render the appropriate chart type based on available columns"""
+    if has_candlestick_columns(df):
+        st.subheader("Candlestick Chart")
+        render_candlestick_chart(df)
+    elif has_line_chart_columns(df):
+        st.subheader("Price Line Chart")
+        render_line_chart(df)
+    else:
+        st.info("Chart visualization not available - missing required columns for candlestick (timestamp, open, high, low, close) or line chart (timestamp, price/ltp/close)")
+
 def get_chart_options():
+    """Get common chart styling options"""
     return {
         "layout": {
             "textColor": "#e0e6f0",
@@ -107,7 +211,8 @@ def get_chart_options():
         }
     }
 
-def build_chart_series(chart_data, volume_data):
+def build_candlestick_series(chart_data, volume_data):
+    """Build candlestick chart series with optional volume"""
     series = [{
         "type": "Candlestick",
         "data": chart_data,
@@ -135,3 +240,19 @@ def build_chart_series(chart_data, volume_data):
         })
     
     return series
+
+def build_line_series(chart_data):
+    """Build line chart series"""
+    return [{
+        "type": "Line",
+        "data": chart_data,
+        "options": {
+            "color": "#2196F3",
+            "lineWidth": 2,
+            "crosshairMarkerVisible": True,
+            "crosshairMarkerRadius": 6,
+            "crosshairMarkerBorderColor": "#ffffff",
+            "crosshairMarkerBackgroundColor": "#2196F3",
+            "lineType": 0
+        }
+    }]

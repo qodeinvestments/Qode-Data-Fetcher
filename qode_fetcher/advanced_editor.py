@@ -1,5 +1,5 @@
 import streamlit as st
-from chart_renderer import has_candlestick_columns, render_candlestick_chart
+from chart_renderer import has_candlestick_columns, has_line_chart_columns, render_appropriate_chart
 from sample_queries import get_sample_queries
 
 def advanced_query_editor(query_engine):
@@ -54,14 +54,19 @@ def execute_advanced_query(query_engine, query):
             if len(result) > 0:
                 st.write(f"**Results: {len(result)} rows**")
                 st.dataframe(result)
-                         
+                
                 col1, col2 = st.columns(2)
                 with col1:
                     csv = result.to_csv(index=False)
                     st.download_button("Download as CSV", csv, "adv_query_results.csv")
                 
-                if has_candlestick_columns(result):
-                    st.subheader("Candlestick Preview")
-                    render_candlestick_chart(result)
+                if has_candlestick_columns(result) or has_line_chart_columns(result):
+                    render_appropriate_chart(result)
+                else:
+                    with st.expander("Available Columns (for chart debugging)"):
+                        st.write("Columns in result:", list(result.columns))
+                        st.write("Chart requirements:")
+                        st.write("- Candlestick: timestamp + (open/o, high/h, low/l, close/c)")
+                        st.write("- Line chart: timestamp + (ltp/close/c/price/value)")
             else:
                 st.info("Query returned no results")

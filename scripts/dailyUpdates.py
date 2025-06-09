@@ -8,9 +8,11 @@ import concurrent.futures
 import duckdb
 import os
 import logging
-import threading
+from dotenv import load_dotenv
 
-DB_PATH = "/mnt/disk2/qode_edw.db"
+load_dotenv()
+
+DB_PATH = "/mnt/disk2/qode_edw_bp.db"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,38 +26,91 @@ logger = logging.getLogger(__name__)
 
 r = direct_redis.DirectRedis(host='localhost', port=6379, db=0)
 tdsymbolidTOsymbol = r.get('tdsymbolidTOsymbol')
+# print(f"Loaded {len(tdsymbolidTOsymbol)} symbol mappings from Redis")
 
-thread_local = threading.local()
+def get_connection():
+    """Get database connection"""
+    return duckdb.connect(DB_PATH)
 
-def get_thread_connection():
-    """Get or create a thread-local database connection"""
-    if not hasattr(thread_local, 'conn'):
-        thread_local.conn = duckdb.connect(DB_PATH)
-        
-    return thread_local.conn
+def get_table_name(symbol, instrument_type, additional_params=None):
+    """Generate table name based on symbol and instrument type"""
+    parts = symbol.split('_')
+    if len(parts) >= 2:
+        exchange = parts[0]
+        underlying = parts[1]
+    else:
+        exchange = "NSE"
+        underlying = symbol
+    
+    if instrument_type == "Options" and additional_params:
+        expiry_date = additional_params.get('expiry_date', '')
+        strike_price = additional_params.get('strike_price', '')
+        option_type = additional_params.get('option_type', '')
+        table_name = f"{exchange}_{instrument_type}_{underlying}_{expiry_date}_{strike_price}_{option_type}"
+    elif instrument_type == "Futures" and additional_params and additional_params.get('expiry_date'):
+        expiry_date = additional_params.get('expiry_date')
+        table_name = f"{exchange}_{instrument_type}_{underlying}_{expiry_date}"
+    else:
+        table_name = f"{exchange}_{instrument_type}_{underlying}"
+    
+    return table_name
 
-def get_main_connection():
-    """Get main database connection for schema operations"""
-    conn = duckdb.connect(DB_PATH)
-
-    return conn
-
-def create_table_if_not_exists(conn, table_name):
-    """Create table if it doesn't exist with the required schema"""
-    create_table_sql = f"""
-    CREATE TABLE IF NOT EXISTS {table_name} (
-        timestamp TIMESTAMP,
-        symbolid INTEGER,
-        symbol VARCHAR,
-        o DOUBLE,
-        h DOUBLE,
-        l DOUBLE,
-        c DOUBLE,
-        v BIGINT,
-        oi BIGINT,
-        PRIMARY KEY (timestamp, symbolid)
-    );
-    """
+def create_table_if_not_exists(conn, table_name, instrument_type):
+    """Create table if it doesn't exist with the required schema based on instrument type"""
+    if instrument_type == "Options":
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            timestamp TIMESTAMP,
+            o DOUBLE,
+            h DOUBLE,
+            l DOUBLE,
+            c DOUBLE,
+            v BIGINT,
+            oi BIGINT,
+            PRIMARY KEY (timestamp)
+        );
+        """
+    elif instrument_type == "Futures":
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            timestamp TIMESTAMP,
+            o DOUBLE,
+            h DOUBLE,
+            l DOUBLE,
+            c DOUBLE,
+            v BIGINT,
+            oi BIGINT,
+            symbol VARCHAR,
+            delivery_cycle VARCHAR,
+            PRIMARY KEY (timestamp)
+        );
+        """
+    elif instrument_type == "Index":
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            timestamp TIMESTAMP,
+            o DOUBLE,
+            h DOUBLE,
+            l DOUBLE,
+            c DOUBLE,
+            PRIMARY KEY (timestamp)
+        );
+        """
+    else:
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            timestamp TIMESTAMP,
+            symbolid INTEGER,
+            symbol VARCHAR,
+            o DOUBLE,
+            h DOUBLE,
+            l DOUBLE,
+            c DOUBLE,
+            v BIGINT,
+            oi BIGINT,
+            PRIMARY KEY (timestamp, symbolid)
+        );
+        """
     
     try:
         conn.execute(create_table_sql)
@@ -65,7 +120,43 @@ def create_table_if_not_exists(conn, table_name):
         logger.error(f"Failed to create table {table_name}: {str(e)}")
         return False
 
-def upsert_data_to_duckdb(conn, df, segment):
+def determine_instrument_type(symbol):
+    """Determine instrument type based on symbol"""
+    if '_OPT_' in symbol or '_CE_' in symbol or '_PE_' in symbol:
+        return "Options"
+    elif '_FUT_' in symbol or 'FUT' in symbol:
+        return "Futures"
+    elif symbol in ['NIFTY', 'BANKNIFTY', 'SENSEX', 'BANKEX'] or 'INDEX' in symbol:
+        return "Index"
+    else:
+        return "Unknown"
+
+def parse_option_symbol(symbol):
+    """Parse option symbol to extract parameters"""
+    additional_params = {}
+    parts = symbol.split('_')
+    
+    if len(parts) >= 4:
+        try:
+            additional_params['expiry_date'] = parts[2] if len(parts[2]) == 8 else ''
+            additional_params['strike_price'] = parts[3] if parts[3].isdigit() else ''
+            additional_params['option_type'] = parts[4].lower() if len(parts) > 4 else ''
+        except:
+            pass
+    
+    return additional_params
+
+def parse_futures_symbol(symbol):
+    """Parse futures symbol to extract parameters"""
+    additional_params = {}
+    parts = symbol.split('_')
+    
+    if len(parts) >= 3 and len(parts[2]) == 8:
+        additional_params['expiry_date'] = parts[2]
+    
+    return additional_params
+
+def upsert_data_to_duckdb(conn, df, instrument_type, table_name):
     """Insert or update data in DuckDB table"""
     if df.empty:
         logger.warning("Empty dataframe received")
@@ -74,46 +165,99 @@ def upsert_data_to_duckdb(conn, df, segment):
     df = df.rename(columns={'open': 'o', 'high': 'h', 'low': 'l', 'close': 'c', 'volume': 'v'})
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     
-    df['symbol'] = df['symbolid'].map(lambda x: tdsymbolidTOsymbol.get(str(x), f"UNKNOWN_{x}"))
-    
-    table_name = f"market_data.{segment}_data"
-    
-    # Create table if it doesn't exist
-    if not create_table_if_not_exists(conn, table_name):
+    if not create_table_if_not_exists(conn, table_name, instrument_type):
         logger.error(f"Failed to create table {table_name}")
         return
     
     try:
-        # Begin transaction
         conn.execute("BEGIN TRANSACTION")
         
-        # Delete existing records for the same timestamps and symbolids to handle overwrites
         timestamps_str = "'" + "','".join(df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()) + "'"
-        symbolids_str = ','.join(df['symbolid'].astype(str).tolist())
         
-        delete_sql = f"""
-        DELETE FROM {table_name} 
-        WHERE timestamp IN ({timestamps_str}) 
-        AND symbolid IN ({symbolids_str})
-        """
+        if instrument_type == "Options":
+            delete_sql = f"""
+            DELETE FROM {table_name} 
+            WHERE timestamp IN ({timestamps_str})
+            """
+            
+            insert_sql = f"""
+            INSERT INTO {table_name} (timestamp, o, h, l, c, v, oi)
+            SELECT 
+                timestamp,
+                o,
+                h,
+                l,
+                c,
+                v,
+                oi
+            FROM df
+            """
+        elif instrument_type == "Futures":
+            delete_sql = f"""
+            DELETE FROM {table_name} 
+            WHERE timestamp IN ({timestamps_str})
+            """
+            
+            df['symbol'] = df['symbolid'].map(lambda x: tdsymbolidTOsymbol.get(str(x), f"UNKNOWN_{x}"))
+            df['delivery_cycle'] = 'I'
+            
+            insert_sql = f"""
+            INSERT INTO {table_name} (timestamp, o, h, l, c, v, oi, symbol, delivery_cycle)
+            SELECT 
+                timestamp,
+                o,
+                h,
+                l,
+                c,
+                v,
+                oi,
+                symbol,
+                delivery_cycle
+            FROM df
+            """
+        elif instrument_type == "Index":
+            delete_sql = f"""
+            DELETE FROM {table_name} 
+            WHERE timestamp IN ({timestamps_str})
+            """
+            
+            insert_sql = f"""
+            INSERT INTO {table_name} (timestamp, o, h, l, c)
+            SELECT 
+                timestamp,
+                o,
+                h,
+                l,
+                c
+            FROM df
+            """
+        else:
+            symbolids_str = ','.join(df['symbolid'].astype(str).tolist())
+            delete_sql = f"""
+            DELETE FROM {table_name} 
+            WHERE timestamp IN ({timestamps_str}) 
+            AND symbolid IN ({symbolids_str})
+            """
+            
+            df['symbol'] = df['symbolid'].map(lambda x: tdsymbolidTOsymbol.get(str(x), f"UNKNOWN_{x}"))
+            
+            insert_sql = f"""
+            INSERT INTO {table_name} (timestamp, symbolid, symbol, o, h, l, c, v, oi)
+            SELECT 
+                timestamp,
+                symbolid,
+                symbol,
+                o,
+                h,
+                l,
+                c,
+                v,
+                oi
+            FROM df
+            """
         
         conn.execute(delete_sql)
-        logger.info(f"Deleted existing records for timestamps and symbols in {table_name}")
-        
-        insert_sql = f"""
-        INSERT INTO {table_name} (timestamp, symbolid, symbol, o, h, l, c, v, oi)
-        SELECT 
-            timestamp,
-            symbolid,
-            symbol,
-            o,
-            h,
-            l,
-            c,
-            v,
-            oi
-        FROM df
-        """
+        logger.info(f"Deleted existing records for timestamps in {table_name}")
         
         conn.execute(insert_sql)
         
@@ -134,24 +278,44 @@ def store_in_duckdb(df, segment, max_workers=4):
         logger.warning("Empty dataframe received")
         return
     
+    conn = get_connection()
     
-    if len(df) <= 10000:
-        conn = get_thread_connection()
-        upsert_data_to_duckdb(conn, df, segment)
+    if 'symbolid' not in df.columns:
+        logger.error("symbolid column not found in dataframe")
         return
     
-    chunk_size = max(1000, len(df) // max_workers)
-    chunks = [df[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
+    grouped = df.groupby('symbolid')
     
-    def process_chunk(chunk_data):
-        conn = get_thread_connection()
-        upsert_data_to_duckdb(conn, chunk_data, segment)
+    for symbolid, group_df in grouped:
+        symbol = tdsymbolidTOsymbol.get(str(symbolid), f"UNKNOWN_{symbolid}")
+        instrument_type = determine_instrument_type(symbol)
+        
+        additional_params = None
+        if instrument_type == "Options":
+            additional_params = parse_option_symbol(symbol)
+        elif instrument_type == "Futures":
+            additional_params = parse_futures_symbol(symbol)
+        
+        table_name = get_table_name(symbol, instrument_type, additional_params)
+        
+        if len(group_df) <= 10000:
+            upsert_data_to_duckdb(conn, group_df, instrument_type, table_name)
+        else:
+            chunk_size = max(10000, len(group_df) // max_workers)
+            chunks = [group_df[i:i + chunk_size] for i in range(0, len(group_df), chunk_size)]
+            
+            def process_chunk(chunk_data):
+                chunk_conn = get_connection()
+                upsert_data_to_duckdb(chunk_conn, chunk_data, instrument_type, table_name)
+                chunk_conn.close()
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+                concurrent.futures.wait(futures)
+            
+            logger.info(f"Completed processing {len(chunks)} chunks for symbol {symbol}")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
-        concurrent.futures.wait(futures)
-    
-    logger.info(f"Completed processing {len(chunks)} chunks for segment {segment}")
+    conn.close()
 
 def generate_timestamps(start_time_str, end_time_str, time_format="%y%m%dT%H:%M"):
     start_time = datetime.strptime(start_time_str, time_format)
@@ -194,6 +358,7 @@ def fetch_data_for_segment(token, segment, timestamps):
             if response.status_code == 200:
                 csv_content = StringIO(response.text)
                 data = pd.read_csv(csv_content)
+                print(f"First few rows:\n{data.head()}")
                 
                 if not data.empty:
                     store_in_duckdb(data, segment)
@@ -218,17 +383,16 @@ def initialize_database():
     """Initialize database and create necessary schemas"""
     logger.info(f"Initializing DuckDB database at: {DB_PATH}")
     
-    # Ensure directory exists
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     
-    conn = get_main_connection()
+    conn = get_connection()
     logger.info("Database initialized successfully")
-    return conn
+    conn.close()
+    return True
 
-def get_table_info(segment):
-    """Get information about existing tables for a segment"""
-    conn = get_thread_connection()
-    table_name = f"market_data.{segment}_data"
+def get_table_info(table_name):
+    """Get information about existing tables"""
+    conn = get_connection()
     
     try:
         result = conn.execute(f"""
@@ -244,40 +408,31 @@ def get_table_info(segment):
         
     except Exception as e:
         logger.info(f"Table {table_name} does not exist or is empty")
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
-    # Initialize database
     initialize_database()
     
-    dt_start = datetime.now().replace(hour=9, minute=15)
-    dt_end = datetime.now().replace(hour=15, minute=30)
+    dt_start = datetime(year=2025, month=4, day=11, hour=9, minute=15, second=0)
+    dt_end = datetime(year=2025, month=6, day=4, hour=15, minute=30, second=0)
     
     start_time = dt_start.strftime("%y%m%dT%H:%M")
     end_time = dt_end.strftime("%y%m%dT%H:%M")
     
-    username = "tdwsf575"
-    password = "vidhi@575"
-    
+    username = os.getenv("TRUEDATA_LOGIN_ID")
+    password = os.getenv("TRUEDATA_LOGIN_PWD")
+
     try:
         token = get_auth_token(username, password)
         logger.info("Authentication successful")
         
-        segments = ['bsefo']  # Example segments
-        # Available segments: 'eq', 'bseeq', 'bseind', 'bsefo', 'ind', 'fo'
-        
-        # Show current table information
-        for segment in segments:
-            get_table_info(segment)
+        segments = ['fo', 'bsefo']
         
         timestamps = generate_timestamps(start_time, end_time)
         logger.info(f"Generated {len(timestamps)} timestamps from {start_time} to {end_time}")
         
         fetch_data(token, segments, timestamps)
-        
-        # Show final table information
-        logger.info("=== FINAL TABLE STATISTICS ===")
-        for segment in segments:
-            get_table_info(segment)
         
     except Exception as e:
         logger.error(f"Script execution failed: {str(e)}")

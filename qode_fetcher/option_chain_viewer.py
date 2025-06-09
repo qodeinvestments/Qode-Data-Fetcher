@@ -2,11 +2,24 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import numpy as np
 from datetime import datetime, timedelta
-import seaborn as sns
 import matplotlib.pyplot as plt
 from data_utils import get_underlyings
+
+def get_available_expiries(query_engine, exchange, underlying, target_datetime):
+    query = f"""
+    SELECT DISTINCT expiry
+    FROM market_data.{exchange}_Options_{underlying}_Master 
+    WHERE timestamp = '{target_datetime}'
+    ORDER BY expiry
+    """
+    
+    result, _, error = query_engine.execute_query(query)
+    
+    if error or len(result) == 0:
+        return []
+    
+    return result['expiry'].tolist()
 
 def option_chain_viewer(query_engine):
     st.markdown("""
@@ -132,7 +145,7 @@ def option_chain_viewer(query_engine):
         st.markdown("**Time**")
         selected_time = st.time_input(
             "",
-            value=datetime.strptime("15:30:00", "%H:%M:%S").time(),
+            value=datetime.strptime("09:15:00", "%H:%M:%S").time(),
             key="oc_time",
             label_visibility="collapsed"
         )
@@ -141,18 +154,50 @@ def option_chain_viewer(query_engine):
     
     st.markdown("---")
     
-    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
+    available_expiries = get_available_expiries(query_engine, selected_exchange, selected_underlying, selected_datetime)
+    
+    if available_expiries is None or len(available_expiries) == 0:
+        st.error(f"No expiry data available for {selected_exchange} - {selected_underlying} on {selected_datetime.strftime('%Y-%m-%d %H:%M')}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+    
+    col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 2, 2, 2, 2])
     
     with col1:
-        st.markdown("**Expiry Filter**")
-        expiry_filter = st.selectbox(
+        st.markdown("**Expiry Mode**")
+        expiry_mode = st.selectbox(
             "",
-            ["All", "Current Week", "Current Month", "Next Month"],
-            key="oc_expiry",
+            ["Specific Date"],
+            key="oc_expiry_mode",
             label_visibility="collapsed"
         )
     
-    with col2:
+    selected_expiry = None
+    
+    if expiry_mode == "Specific Date":
+        with col2:
+            st.markdown("**Select Expiry**")
+            expiry_options = [
+                pd.to_datetime(exp).strftime("%d %b %y") if not pd.isnull(exp) else str(exp)
+                for exp in available_expiries
+            ]
+            
+            expiry_map = {}
+            for exp in available_expiries:
+                if not pd.isnull(exp):
+                    expiry_map[pd.to_datetime(exp).strftime("%d %b %y")] = exp
+                else:
+                    expiry_map[str(exp)] = exp
+
+            selected_expiry_label = st.selectbox(
+                "",
+                expiry_options,
+                key="oc_specific_expiry",
+                label_visibility="collapsed"
+            )
+            selected_expiry = expiry_map[selected_expiry_label]
+    
+    with col3 if expiry_mode == "Specific Date" else col4:
         st.markdown("**Option Type**")
         option_type_filter = st.selectbox(
             "",
@@ -161,24 +206,24 @@ def option_chain_viewer(query_engine):
             label_visibility="collapsed"
         )
     
-    with col3:
+    with col4 if expiry_mode == "Specific Date" else col5:
         st.markdown("**Strike Range (%)**")
         strike_range = st.slider(
             "",
             min_value=1,
             max_value=50,
-            value=10,
+            value=5,
             step=1,
             key="oc_range",
             label_visibility="collapsed"
         )
     
-    with col4:
+    with col5 if expiry_mode == "Specific Date" else col6:
         st.markdown("**Show Charts**")
         show_charts = st.checkbox("Enable", value=False, key="show_charts")
     
-    with col5:
-        st.markdown("**Action**")
+    with col6:
+        st.markdown("**Fetch Data**")
         fetch_button = st.button("Fetch Data", type="primary", key="oc_fetch", use_container_width=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
@@ -189,7 +234,7 @@ def option_chain_viewer(query_engine):
             selected_exchange,
             selected_underlying,
             selected_datetime,
-            expiry_filter,
+            selected_expiry,
             option_type_filter,
             strike_range,
             show_charts
@@ -233,7 +278,7 @@ def get_previous_oi_data(query_engine, exchange, underlying, target_datetime):
     
     return result
 
-def build_option_chain_query(exchange, underlying, target_datetime, expiry_filter, option_type_filter, spot_price, strike_range):
+def build_option_chain_query(exchange, underlying, target_datetime, selected_expiry, option_type_filter, spot_price, strike_range):
     base_query = f"""
     SELECT 
         timestamp,
@@ -251,13 +296,8 @@ def build_option_chain_query(exchange, underlying, target_datetime, expiry_filte
     FROM market_data.{exchange}_Options_{underlying}_Master WHERE timestamp = '{target_datetime}'
     """
     
-    if expiry_filter != "All":
-        if expiry_filter == "Current Week":
-            base_query += f" AND expiry >= '{target_datetime.date()}' AND expiry <= '{(target_datetime + timedelta(days=7)).date()}'"
-        elif expiry_filter == "Current Month":
-            base_query += f" AND expiry >= '{target_datetime.date()}' AND expiry <= '{(target_datetime + timedelta(days=30)).date()}'"
-        elif expiry_filter == "Next Month":
-            base_query += f" AND expiry >= '{(target_datetime + timedelta(days=30)).date()}' AND expiry <= '{(target_datetime + timedelta(days=60)).date()}'"
+    if selected_expiry:
+        base_query += f" AND expiry = '{selected_expiry}'"
     
     if option_type_filter != "All":
         base_query += f" AND option_type = '{option_type_filter.lower()}'"
@@ -540,7 +580,7 @@ def create_market_microstructure_analysis(df, spot_price):
     return fig
 
 def fetch_enhanced_option_chain(query_engine, exchange, underlying, target_datetime, 
-                               expiry_filter, option_type_filter, strike_range, show_charts):
+                               selected_expiry, option_type_filter, strike_range, show_charts):
     
     with st.spinner("Fetching spot price..."):
         spot_price = get_spot_price(query_engine, exchange, underlying, target_datetime)
@@ -558,7 +598,7 @@ def fetch_enhanced_option_chain(query_engine, exchange, underlying, target_datet
     with st.spinner("Fetching option chain data..."):
         query = build_option_chain_query(
             exchange, underlying, target_datetime, 
-            expiry_filter, option_type_filter, spot_price, strike_range
+            selected_expiry, option_type_filter, spot_price, strike_range
         )
         
         result, exec_time, error = query_engine.execute_query(query)

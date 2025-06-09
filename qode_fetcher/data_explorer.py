@@ -38,116 +38,78 @@ def data_explorer(query_engine):
     
     st.markdown("---")
     
-    st.subheader("Table Search")
+    st.subheader("Search and Filter Tables")
     
-    search_tab, filter_tab = st.tabs(["Quick Search", "Filter"])
+    col1, col2, col3 = st.columns([2, 1, 1])
     
-    with search_tab:
-        col1, col2 = st.columns([3, 1])
+    with col1:
+        search_query = st.text_input(
+            "Search tables:",
+            placeholder="e.g., NSE, NIFTY, Options, RELIANCE...",
+            key="table_search"
+        )
+    
+    with col2:
+        exchange_filter = st.selectbox(
+            "Exchange:",
+            options=["", "NSE", "BSE", "CBOE"]
+        )
+    
+    with col3:
+        instrument_filter = st.selectbox(
+            "Instrument:",
+            options=["", "Index", "Options", "Futures", "Stocks"]
+        )
+    
+    matching_tables = []
+    
+    if search_query or exchange_filter or instrument_filter:
+        start_time = time.time()
         
-        with col1:
-            search_query = st.text_input(
-                "Search tables:",
-                placeholder="e.g., NSE, NIFTY, Options, RELIANCE...",
-                help="Type to search across all table names. Supports partial matching.",
-                key="table_search"
+        if search_query and (exchange_filter or instrument_filter):
+            fuzzy_results = fuzzy_search_tables(
+                st.session_state.all_tables, 
+                search_query, 
+                limit=200
             )
-        
-        with col2:
-            search_limit = st.selectbox(
-                "Max Results:",
-                options=[25, 50, 100, 200],
-                index=1,
-                help="Limit search results for better performance"
+            matching_tables = search_tables_by_pattern(
+                fuzzy_results,
+                exchange=exchange_filter,
+                instrument=instrument_filter,
+                limit=25
             )
-        
-        if search_query:
-            start_time = time.time()
+        elif search_query:
             matching_tables = fuzzy_search_tables(
                 st.session_state.all_tables, 
                 search_query, 
-                limit=search_limit
+                limit=25
             )
-            search_time = time.time() - start_time
-            
-            if matching_tables:
-                st.success(f"Found {len(matching_tables)} matches in {search_time:.3f}s")
-                
-                selected_table = st.selectbox(
-                    "Select a table:",
-                    options=[""] + matching_tables,
-                    format_func=lambda x: x if x else "-- Select a table --",
-                    key="selected_table_search"
-                )
-                
-                if selected_table:
-                    show_table_details(query_engine, selected_table)
-            else:
-                st.warning("No matching tables found. Try a different search term.")
         else:
-            st.info(f"Total tables available: {len(st.session_state.all_tables):,}")
-    
-    with filter_tab:
-        st.markdown("**Filter by Components:**")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            exchange_filter = st.selectbox(
-                "Exchange:",
-                options=["", "NSE", "BSE", "CBOE"],
-                help="Filter by exchange"
+            matching_tables = search_tables_by_pattern(
+                st.session_state.all_tables,
+                exchange=exchange_filter,
+                instrument=instrument_filter,
+                limit=25
             )
         
-        with col2:
-            instrument_filter = st.selectbox(
-                "Instrument:",
-                options=["", "Index", "Options", "Futures", "Stocks"],
-                help="Filter by instrument type"
+        search_time = time.time() - start_time
+        
+        if matching_tables:
+            st.success(f"Found {len(matching_tables)} matches in {search_time:.3f}s")
+            
+            selected_table = st.selectbox(
+                "Select a table:",
+                options=[""] + matching_tables,
+                format_func=lambda x: x if x else "-- Select a table --",
+                key="selected_table"
             )
-        
-        with col3:
-            underlying_filter = st.text_input(
-                "Underlying:",
-                placeholder="e.g., NIFTY, BANKNIFTY, RELIANCE",
-                help="Filter by underlying asset"
-            )
-        
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            if st.button("Apply Filters", type="primary"):
-                if any([exchange_filter, instrument_filter, underlying_filter]):
-                    start_time = time.time()
-                    filtered_tables = search_tables_by_pattern(
-                        st.session_state.all_tables,
-                        exchange=exchange_filter,
-                        instrument=instrument_filter,
-                        underlying=underlying_filter,
-                        limit=search_limit
-                    )
-                    search_time = time.time() - start_time
-                    
-                    if filtered_tables:
-                        st.success(f"Found {len(filtered_tables)} matches in {search_time:.3f}s")
-                        
-                        selected_table_filter = st.selectbox(
-                            "Select a table:",
-                            options=[""] + filtered_tables,
-                            format_func=lambda x: x if x else "-- Select a table --",
-                            key="selected_table_filter"
-                        )
-                        
-                        if selected_table_filter:
-                            show_table_details(query_engine, selected_table_filter)
-                    else:
-                        st.warning("No tables match the selected filters.")
-                else:
-                    st.warning("Please select at least one filter.")
-        
-        with col2:
-            if st.button("Clear Filters"):
-                st.rerun()
+            
+            if selected_table:
+                show_table_details(query_engine, selected_table)
+        else:
+            st.warning("No matching tables found. Try a different search term or filter.")
+    else:
+        st.info(f"Total tables available: {len(st.session_state.all_tables):,}")
 
 def show_table_details(query_engine, table_name):
     st.markdown("---")
