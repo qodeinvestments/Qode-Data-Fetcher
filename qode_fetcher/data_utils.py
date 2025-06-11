@@ -325,9 +325,8 @@ def get_spot_price(query_engine, exchange, underlying, target_datetime):
     
     return float(result.iloc[0]['c'])
 
-def build_option_chain_query(exchange, underlying, target_datetime, selected_expiry, option_type_filter, spot_price, strike_range):
-    base_query = f"""
-    SELECT 
+def build_option_chain_query(exchange, underlying, target_datetime, selected_expiry, option_type_filter, spot_price, strike_range, available_columns):
+    base_columns = """
         timestamp,
         expiry,
         symbol,
@@ -340,6 +339,29 @@ def build_option_chain_query(exchange, underlying, target_datetime, selected_exp
         close,
         volume,
         open_interest
+    """
+    
+    optional_columns = []
+    if 'iv' in available_columns:
+        optional_columns.append('iv')
+    if 'delta' in available_columns:
+        optional_columns.append('delta')
+    if 'gamma' in available_columns:
+        optional_columns.append('gamma')
+    if 'theta' in available_columns:
+        optional_columns.append('theta')
+    if 'vega' in available_columns:
+        optional_columns.append('vega')
+    if 'rho' in available_columns:
+        optional_columns.append('rho')
+    
+    all_columns = base_columns
+    if optional_columns:
+        all_columns += ",\n        " + ",\n        ".join(optional_columns)
+    
+    base_query = f"""
+    SELECT 
+        {all_columns}
     FROM market_data.{exchange}_Options_{underlying}_Master WHERE timestamp = '{target_datetime}'
     """
     
@@ -354,16 +376,7 @@ def build_option_chain_query(exchange, underlying, target_datetime, selected_exp
         upper_bound = spot_price * (1 + strike_range / 100)
         base_query += f" AND strike BETWEEN {lower_bound} AND {upper_bound}"
     
-    final_query = f"""
-    WITH latest_data AS (
-        {base_query}
-    ),
-    ranked_data AS (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY expiry, strike, option_type ORDER BY timestamp DESC) as rn
-        FROM latest_data
-    )
-    SELECT 
+    final_columns = """
         expiry,
         symbol,
         strike,
@@ -376,6 +389,22 @@ def build_option_chain_query(exchange, underlying, target_datetime, selected_exp
         volume,
         open_interest,
         timestamp
+    """
+    
+    if optional_columns:
+        final_columns += ",\n        " + ",\n        ".join(optional_columns)
+    
+    final_query = f"""
+    WITH latest_data AS (
+        {base_query}
+    ),
+    ranked_data AS (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY expiry, strike, option_type ORDER BY timestamp DESC) as rn
+        FROM latest_data
+    )
+    SELECT 
+        {final_columns}
     FROM ranked_data
     WHERE rn = 1
     ORDER BY expiry, strike, option_type

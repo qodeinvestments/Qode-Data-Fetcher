@@ -550,7 +550,7 @@ def execute_time_series_query(query_engine, query):
                     csv = result.to_csv(index=False)
                     st.download_button("Download as CSV", csv, "ts_query_results.csv")
                 
-                if has_candlestick_columns(result):
+                if has_candlestick_columns(result) and len(result) > 0:
                     st.subheader("Candlestick Preview")
                     render_candlestick_chart(result)
             else:

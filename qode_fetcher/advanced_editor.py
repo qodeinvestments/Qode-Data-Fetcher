@@ -62,11 +62,6 @@ def execute_advanced_query(query_engine, query):
                 
                 if has_candlestick_columns(result) or has_line_chart_columns(result):
                     render_appropriate_chart(result)
-                else:
-                    with st.expander("Available Columns (for chart debugging)"):
-                        st.write("Columns in result:", list(result.columns))
-                        st.write("Chart requirements:")
-                        st.write("- Candlestick: timestamp + (open/o, high/h, low/l, close/c)")
-                        st.write("- Line chart: timestamp + (ltp/close/c/price/value)")
+                
             else:
                 st.info("Query returned no results")

@@ -11,36 +11,50 @@ def normalize_column_name(df_columns, target_names):
     return None
 
 def has_candlestick_columns(df):
-    """Check if dataframe has required columns for candlestick chart"""
+    """Check if dataframe has required columns for candlestick chart and no repeated timestamps"""
     if df.empty:
         return False
-    
+
     timestamp_variants = ['timestamp', 'time', 'date', 'datetime']
     open_variants = ['open', 'o']
     high_variants = ['high', 'h']
     low_variants = ['low', 'l']
     close_variants = ['close', 'c']
-    
+
     timestamp_col = normalize_column_name(df.columns, timestamp_variants)
     open_col = normalize_column_name(df.columns, open_variants)
     high_col = normalize_column_name(df.columns, high_variants)
     low_col = normalize_column_name(df.columns, low_variants)
     close_col = normalize_column_name(df.columns, close_variants)
-    
-    return all([timestamp_col, open_col, high_col, low_col, close_col])
+
+    if not all([timestamp_col, open_col, high_col, low_col, close_col]):
+        return False
+
+    timestamps = pd.to_datetime(df[timestamp_col], errors='coerce')
+    if timestamps.duplicated().any():
+        return False
+
+    return True
 
 def has_line_chart_columns(df):
-    """Check if dataframe has required columns for line chart"""
+    """Check if dataframe has required columns for line chart and no repeated timestamps"""
     if df.empty:
         return False
-    
+
     timestamp_variants = ['timestamp', 'time', 'date', 'datetime']
     price_variants = ['ltp', 'close', 'c', 'price', 'value']
-    
+
     timestamp_col = normalize_column_name(df.columns, timestamp_variants)
     price_col = normalize_column_name(df.columns, price_variants)
-    
-    return timestamp_col is not None and price_col is not None
+
+    if not (timestamp_col and price_col):
+        return False
+
+    timestamps = pd.to_datetime(df[timestamp_col], errors='coerce')
+    if timestamps.duplicated().any():
+        return False
+
+    return True
 
 def filter_last_week(df, timestamp_col):
     """Filter dataframe to show only last 7 days of data"""
