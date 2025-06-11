@@ -4,112 +4,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-from data_utils import get_underlyings
-
-def get_available_expiries(query_engine, exchange, underlying, target_datetime):
-    query = f"""
-    SELECT DISTINCT expiry
-    FROM market_data.{exchange}_Options_{underlying}_Master 
-    WHERE timestamp = '{target_datetime}'
-    ORDER BY expiry
-    """
-    
-    result, _, error = query_engine.execute_query(query)
-    
-    if error or len(result) == 0:
-        return []
-    
-    return result['expiry'].tolist()
+from data_utils import get_underlyings, build_option_chain_query, get_available_expiries, get_spot_price
+from app_styles import get_option_chain_styles
 
 def option_chain_viewer(query_engine):
-    st.markdown("""
-    <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: #1f2937;
-        margin-bottom: 2rem;
-        text-align: center;
-        border-bottom: 3px solid #3b82f6;
-        padding-bottom: 1rem;
-    }
-    .section-header {
-        font-size: 1.5rem;
-        font-weight: 600;
-        color: #374151;
-        margin: 1.5rem 0 1rem 0;
-        border-left: 4px solid #3b82f6;
-        padding-left: 1rem;
-    }
-    .metric-container {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        text-align: center;
-        margin: 0.5rem 0;
-    }
-    
-    .sensibull-option-chain {
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        font-size: 12px;
-        border-collapse: collapse;
-        width: 100%;
-        margin: 20px 0;
-    }
-    
-    .sensibull-option-chain thead th {
-        background-color: #f8f9fa;
-        color: #495057;
-        font-weight: 600;
-        padding: 12px 8px;
-        text-align: center;
-        border: 1px solid #dee2e6;
-        font-size: 11px;
-    }
-    
-    .sensibull-option-chain tbody td {
-        padding: 8px 6px;
-        text-align: center;
-        border: 1px solid #dee2e6;
-        font-size: 11px;
-    }
-    
-    .call-oi-change { color: #dc3545; font-weight: 500; }
-    .call-oi-lakh { color: #6c757d; }
-    .call-ltp { color: #000; font-weight: 600; }
-    .call-volume { color: #6c757d; }
-    
-    .strike-price { 
-        font-weight: bold; 
-        color: #000;
-        background-color: #fff3cd !important;
-    }
-    
-    .put-ltp { color: #000; font-weight: 600; }
-    .put-oi-change { color: #28a745; font-weight: 500; }
-    .put-oi-lakh { color: #6c757d; }
-    .put-volume { color: #6c757d; }
-    
-    .atm-strike {
-        background-color: #fff3cd !important;
-        font-weight: bold;
-    }
-    
-    .itm-call { background-color: #d4edda; }
-    .otm-call { background-color: #f8d7da; }
-    .itm-put { background-color: #f8d7da; }
-    .otm-put { background-color: #d4edda; }
-    
-    .controls-section {
-        background: #f8fafc;
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border: 1px solid #e2e8f0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown(get_option_chain_styles(), unsafe_allow_html=True)
     
     st.markdown('<div class="main-header">Option Chain Analytics Platform</div>', unsafe_allow_html=True)
     
@@ -240,24 +139,6 @@ def option_chain_viewer(query_engine):
             show_charts
         )
 
-def get_spot_price(query_engine, exchange, underlying, target_datetime):
-    underlying_table = f"{exchange}_Index_{underlying}"
-    
-    query = f"""
-    SELECT o, h, l, c
-    FROM market_data.{underlying_table}
-    WHERE timestamp = '{target_datetime}'
-    ORDER BY timestamp DESC
-    LIMIT 1
-    """
-    
-    result, _, error = query_engine.execute_query(query)
-    
-    if error or len(result) == 0:
-        return None
-    
-    return float(result.iloc[0]['c'])
-
 def get_previous_oi_data(query_engine, exchange, underlying, target_datetime):
     previous_datetime = target_datetime - timedelta(minutes=15)
     
@@ -277,64 +158,6 @@ def get_previous_oi_data(query_engine, exchange, underlying, target_datetime):
         return pd.DataFrame()
     
     return result
-
-def build_option_chain_query(exchange, underlying, target_datetime, selected_expiry, option_type_filter, spot_price, strike_range):
-    base_query = f"""
-    SELECT 
-        timestamp,
-        expiry,
-        symbol,
-        strike,
-        option_type,
-        underlying,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        open_interest
-    FROM market_data.{exchange}_Options_{underlying}_Master WHERE timestamp = '{target_datetime}'
-    """
-    
-    if selected_expiry:
-        base_query += f" AND expiry = '{selected_expiry}'"
-    
-    if option_type_filter != "All":
-        base_query += f" AND option_type = '{option_type_filter.lower()}'"
-    
-    if spot_price and strike_range:
-        lower_bound = spot_price * (1 - strike_range / 100)
-        upper_bound = spot_price * (1 + strike_range / 100)
-        base_query += f" AND strike BETWEEN {lower_bound} AND {upper_bound}"
-    
-    final_query = f"""
-    WITH latest_data AS (
-        {base_query}
-    ),
-    ranked_data AS (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY expiry, strike, option_type ORDER BY timestamp DESC) as rn
-        FROM latest_data
-    )
-    SELECT 
-        expiry,
-        symbol,
-        strike,
-        option_type,
-        underlying,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        open_interest,
-        timestamp
-    FROM ranked_data
-    WHERE rn = 1
-    ORDER BY expiry, strike, option_type
-    """
-    
-    return final_query
 
 def create_sensibull_option_chain(df, spot_price, prev_oi_df):
     if len(df) == 0:

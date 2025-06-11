@@ -291,3 +291,94 @@ def get_option_tables_by_premium_percentage(query_engine, exchange, underlying, 
     except Exception as e:
         st.error(f"Error fetching option tables by premium percentage: {e}")
         return []
+    
+def get_available_expiries(query_engine, exchange, underlying, target_datetime):
+    query = f"""
+    SELECT DISTINCT expiry
+    FROM market_data.{exchange}_Options_{underlying}_Master 
+    WHERE timestamp = '{target_datetime}'
+    ORDER BY expiry
+    """
+    
+    result, _, error = query_engine.execute_query(query)
+    
+    if error or len(result) == 0:
+        return []
+    
+    return result['expiry'].tolist()
+
+def get_spot_price(query_engine, exchange, underlying, target_datetime):
+    underlying_table = f"{exchange}_Index_{underlying}"
+    
+    query = f"""
+    SELECT c
+    FROM market_data.{underlying_table}
+    WHERE timestamp = '{target_datetime}'
+    ORDER BY timestamp DESC
+    LIMIT 1
+    """
+    
+    result, _, error = query_engine.execute_query(query)
+    
+    if error or len(result) == 0:
+        return None
+    
+    return float(result.iloc[0]['c'])
+
+def build_option_chain_query(exchange, underlying, target_datetime, selected_expiry, option_type_filter, spot_price, strike_range):
+    base_query = f"""
+    SELECT 
+        timestamp,
+        expiry,
+        symbol,
+        strike,
+        option_type,
+        underlying,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        open_interest
+    FROM market_data.{exchange}_Options_{underlying}_Master WHERE timestamp = '{target_datetime}'
+    """
+    
+    if selected_expiry:
+        base_query += f" AND expiry = '{selected_expiry}'"
+    
+    if option_type_filter != "All":
+        base_query += f" AND option_type = '{option_type_filter.lower()}'"
+    
+    if spot_price and strike_range:
+        lower_bound = spot_price * (1 - strike_range / 100)
+        upper_bound = spot_price * (1 + strike_range / 100)
+        base_query += f" AND strike BETWEEN {lower_bound} AND {upper_bound}"
+    
+    final_query = f"""
+    WITH latest_data AS (
+        {base_query}
+    ),
+    ranked_data AS (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY expiry, strike, option_type ORDER BY timestamp DESC) as rn
+        FROM latest_data
+    )
+    SELECT 
+        expiry,
+        symbol,
+        strike,
+        option_type,
+        underlying,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        open_interest,
+        timestamp
+    FROM ranked_data
+    WHERE rn = 1
+    ORDER BY expiry, strike, option_type
+    """
+    
+    return final_query
