@@ -135,14 +135,16 @@ def show_table_details(query_engine, table_name):
         if metadata:
             st.markdown("### Table Statistics")
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Total Rows", f"{metadata['total_rows']:,}")
             with col2:
                 st.metric("Columns", metadata['total_columns'])
             with col3:
                 st.metric("Frequency", metadata['frequency'])
-            
+            with col4:
+                st.metric("Missing Timestamps", metadata['missing_timestamps'] if metadata['missing_timestamps'] is not None else "Unknown")
+
             if metadata['earliest_timestamp'] and metadata['latest_timestamp']:
                 col1, col2 = st.columns(2)
                 with col1:

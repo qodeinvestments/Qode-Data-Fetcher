@@ -192,13 +192,24 @@ def get_table_metadata(conn, table_name):
                     frequency = f"{days:.2f} days"
         except Exception as freq_error:
             frequency = "Unknown"
-        
+            
+        missing_timestamps = None
+        if earliest_ts is not None and latest_ts is not None and avg_seconds is not None and avg_seconds > 0:
+            try:
+                total_expected = int((latest_ts - earliest_ts).total_seconds() // avg_seconds) + 1
+                missing_timestamps = total_expected - total_rows
+                if missing_timestamps < 0:
+                    missing_timestamps = 0
+            except Exception:
+                missing_timestamps = None
+            
         return {
             'total_rows': total_rows,
             'total_columns': total_columns,
             'earliest_timestamp': earliest_ts,
             'latest_timestamp': latest_ts,
-            'frequency': frequency
+            'frequency': frequency,
+            'missing_timestamps': missing_timestamps
         }
     except Exception as e:
         st.error(f"Error getting metadata for {table_name}: {e}")

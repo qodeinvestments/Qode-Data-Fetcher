@@ -7,7 +7,7 @@ from greeks_calculator import greeks_calculator
 def sql_query_interface(query_engine):
     st.header("SQL Query Interface")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["Time Series Query Builder", "Option Chain Viewer", "Greeks Calculator", "SQL Editor"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Time Series Query Builder", "Historical Option Chain", "Greeks Calculator", "SQL Editor"])
     
     with tab1:
         time_series_query_builder(query_engine)

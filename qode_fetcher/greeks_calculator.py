@@ -305,47 +305,76 @@ def greeks_calculator():
                         st.plotly_chart(fig4, use_container_width=True)
     
     with tab3:
-        st.subheader("🛠️ Professional Tools")
-        
-        current_price = call_price if option_type == "Call" else put_price
-        
-        col1, col2 = st.columns(2)
-        
+        st.markdown(
+            """
+            <style>
+            .tool-header {
+                font-size: 1.2rem;
+                font-weight: 600;
+                margin-bottom: 0.5rem;
+            }
+            .tool-desc {
+                font-size: 0.95rem;
+                color: #64748b;
+                margin-bottom: 1rem;
+            }
+            </style>
+            """, unsafe_allow_html=True
+        )
+        st.subheader("🛠️ Professional Tools & Utilities")
+
+        col1, col2 = st.columns(2, gap="large")
+
         with col1:
-            st.markdown('<div class="input-section">', unsafe_allow_html=True)
-            st.markdown("**Implied Volatility Calculator**")
-            
-            market_price = st.number_input(f"Market Price ({currency_symbol})", 
-                                         value=call_price if option_type == "Call" else put_price, 
-                                         min_value=0.01, format="%.4f")
-            
-            if st.button("🔍 Calculate Implied Volatility", use_container_width=True, type="primary"):
+            st.markdown('<div class="tool-header">Implied Volatility Calculator</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="tool-desc">Estimate the implied volatility from a given market price for the selected option.</div>',
+                unsafe_allow_html=True
+            )
+            market_price = st.number_input(
+                f"Market Price ({currency_symbol})",
+                value=call_price if option_type == "Call" else put_price,
+                min_value=0.01, format="%.4f"
+            )
+            calc_iv = st.button("🔍 Calculate Implied Volatility", key="calc_iv", use_container_width=True, type="primary")
+            if calc_iv:
                 with st.spinner("Computing implied volatility..."):
                     iv = calculate_implied_volatility(market_price, S, K, T, r, option_type.lower())
                     if iv:
                         vol_diff = (iv - sigma) * 100
                         st.success(f"Implied Volatility: **{iv*100:.2f}%**")
-                        if vol_diff > 0:
-                            st.info(f"{vol_diff:+.2f}% higher than input volatility")
-                        else:
-                            st.info(f"{vol_diff:+.2f}% lower than input volatility")
+                        if abs(vol_diff) > 0.01:
+                            st.info(f"{vol_diff:+.2f}% {'higher' if vol_diff > 0 else 'lower'} than input volatility")
                     else:
                         st.error("❌ Could not calculate implied volatility")
-            
             st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="input-section">', unsafe_allow_html=True)
-            st.markdown("**Parameter Export & Analysis**")
-            
-            if st.button("📋 Copy Parameters", use_container_width=True):
+
+            st.markdown('<div class="tool-card">', unsafe_allow_html=True)
+            st.markdown('<div class="tool-header">Parameter Export</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="tool-desc">Copy the current option parameters for documentation or sharing.</div>',
+                unsafe_allow_html=True
+            )
+            if st.button("📋 Copy Parameters", key="copy_params", use_container_width=True):
                 params = f"S={S}, K={K}, T={T:.4f}, r={r*100:.2f}%, σ={sigma*100:.2f}%"
                 st.code(params, language="text")
-            
-            st.markdown("**Target Price Analysis**")
-            target_price = st.number_input("Target Option Price", value=current_price*1.1, format="%.4f")
-            
-            if st.button("Reverse Engineer", use_container_width=True):
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col2:
+            st.markdown('<div class="tool-card">', unsafe_allow_html=True)
+            st.markdown('<div class="tool-header">Target Price Analysis</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="tool-desc">Reverse engineer the volatility required to reach a desired option price.</div>',
+                unsafe_allow_html=True
+            )
+            current_price = call_price if option_type == "Call" else put_price
+            target_price = st.number_input(
+                "Target Option Price",
+                value=round(current_price * 1.1, 4),
+                min_value=0.01, format="%.4f"
+            )
+            reverse_btn = st.button("🎯 Reverse Engineer", key="reverse_engineer", use_container_width=True)
+            if reverse_btn:
                 if target_price > 0:
                     target_iv = calculate_implied_volatility(target_price, S, K, T, r, option_type.lower())
                     if target_iv:
@@ -354,5 +383,4 @@ def greeks_calculator():
                         st.info(f"Volatility change needed: **{vol_change:+.1f}%**")
                     else:
                         st.error("❌ Target price not achievable")
-            
             st.markdown('</div>', unsafe_allow_html=True)

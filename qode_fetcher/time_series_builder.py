@@ -211,6 +211,9 @@ def handle_single_instrument_view_with_info(query_engine, selected_exchange, sel
     
     expiry_dates = get_option_expiry_dates(query_engine, selected_exchange, selected_underlying)
     
+    expiry_dates = [pd.to_datetime(date).strftime("%d %b %Y") for date in expiry_dates]
+    expiry_dates.sort(key=lambda x: datetime.strptime(x, "%d %b %Y"))
+    
     if not expiry_dates:
         st.warning("No expiry dates available for this underlying")
         return
@@ -219,7 +222,9 @@ def handle_single_instrument_view_with_info(query_engine, selected_exchange, sel
     
     with col1:
         selected_expiry = st.selectbox("Expiry Date:", expiry_dates)
-    
+        selected_expiry = datetime.strptime(selected_expiry, "%d %b %Y").date()
+        selected_expiry = selected_expiry.strftime("%Y%m%d")
+
     with col2:
         strike_prices = get_option_strikes(query_engine, selected_exchange, selected_underlying, selected_expiry)
         if not strike_prices:
@@ -228,7 +233,7 @@ def handle_single_instrument_view_with_info(query_engine, selected_exchange, sel
         selected_strike = st.selectbox("Strike Price:", strike_prices)
     
     with col3:
-        option_type = st.selectbox("Option Type:", ["Call", "Put"])
+        option_type = st.selectbox("Option Type:", ["Put", "Call"])
     
     table_name = f"{selected_exchange}_Options_{selected_underlying}_{selected_expiry}_{int(selected_strike)}_{option_type.lower()}"
     
@@ -433,23 +438,36 @@ def handle_options_time_range_and_execution(query_engine, table_name, method_key
     st.markdown("### Time Range")
     col1, col2 = st.columns(2)
     
+    st.write(table_name)
+    
+    earliest, latest, _ = get_table_timestamp_info(query_engine, table_name)
+
     with col1:
         start_date = st.date_input(
             "Start Date:",
-            value=datetime.now() - timedelta(days=30),
+            value=earliest.date() if earliest else (datetime.now() - timedelta(days=30)).date(),
+            min_value=datetime(2000, 1, 1).date(),
             max_value=datetime.now().date(),
             key=f"{method_key}_start_date"
         )
-        start_time = st.time_input("Start Time:", value=datetime.strptime("09:15:00", "%H:%M:%S").time(), key=f"{method_key}_start_time")
-    
+        start_time = st.time_input(
+            "Start Time:",
+            value=earliest.time() if earliest else datetime.strptime("09:15:00", "%H:%M:%S").time(),
+            key=f"{method_key}_start_time"
+        )
+
     with col2:
         end_date = st.date_input(
             "End Date:",
-            value=datetime.now().date(),
+            value=latest.date() if latest else datetime.now().date(),
             max_value=datetime.now().date(),
             key=f"{method_key}_end_date"
         )
-        end_time = st.time_input("End Time:", value=datetime.strptime("15:30:00", "%H:%M:%S").time(), key=f"{method_key}_end_time")
+        end_time = st.time_input(
+            "End Time:",
+            value=latest.time() if latest else datetime.strptime("15:30:00", "%H:%M:%S").time(),
+            key=f"{method_key}_end_time"
+        )
     
     start_datetime = datetime.combine(start_date, start_time)
     end_datetime = datetime.combine(end_date, end_time)

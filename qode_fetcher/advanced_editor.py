@@ -55,10 +55,23 @@ def execute_advanced_query(query_engine, query):
                 st.write(f"**Results: {len(result)} rows**")
                 st.dataframe(result)
                 
-                col1, col2 = st.columns(2)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     csv = result.to_csv(index=False)
                     st.download_button("Download as CSV", csv, "adv_query_results.csv")
+                
+                with col2:
+                    json_data = result.to_json(orient='records')
+                    st.download_button("Download as JSON", json_data, "adv_query_results.json")
+                    
+                with col3:
+                    parquet_file = result.to_parquet()
+                    st.download_button("Download as Parquet", parquet_file, "adv_query_results.parquet")
+                    
+                with col4:
+                    gzip_file = result.to_csv(compression='gzip')
+                    st.download_button("Download as Gzip CSV", gzip_file, "adv_query_results.csv.gz", mime="application/gzip")
+                    
                 
                 if has_candlestick_columns(result) or has_line_chart_columns(result):
                     render_appropriate_chart(result)

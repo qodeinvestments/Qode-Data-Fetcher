@@ -24,7 +24,7 @@ def check_iv_greeks_columns(query_engine, exchange, underlying):
 def option_chain_viewer(query_engine):
     st.markdown(get_option_chain_styles(), unsafe_allow_html=True)
     
-    st.markdown('<div class="main-header">Option Chain Analytics Platform</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">Historical Option Chain</div>', unsafe_allow_html=True)
     
     col1, col2, col3, col4 = st.columns([2, 3, 2, 2])
     
@@ -44,11 +44,24 @@ def option_chain_viewer(query_engine):
             st.markdown('</div>', unsafe_allow_html=True)
             return
     
+    latest_ts_query = f"""
+        SELECT MAX(timestamp) as last_ts
+        FROM market_data.{selected_exchange}_Options_{selected_underlying}_Master
+    """
+    latest_ts_result, _, _ = query_engine.execute_query(latest_ts_query)
+    if latest_ts_result is not None and len(latest_ts_result) > 0 and pd.notnull(latest_ts_result.iloc[0]['last_ts']):
+        last_ts = pd.to_datetime(latest_ts_result.iloc[0]['last_ts'])
+        default_date = last_ts.date()
+        default_time = last_ts.time()
+    else:
+        default_date = datetime.now().date()
+        default_time = datetime.strptime("09:15:00", "%H:%M:%S").time()
+
     with col3:
         st.markdown("**Date**")
         selected_date = st.date_input(
             "",
-            value=datetime.now().date(),
+            value=default_date,
             max_value=datetime.now().date(),
             key="oc_date",
             label_visibility="collapsed"
@@ -58,7 +71,7 @@ def option_chain_viewer(query_engine):
         st.markdown("**Time**")
         selected_time = st.time_input(
             "",
-            value=datetime.strptime("09:15:00", "%H:%M:%S").time(),
+            value=default_time,
             key="oc_time",
             label_visibility="collapsed"
         )
