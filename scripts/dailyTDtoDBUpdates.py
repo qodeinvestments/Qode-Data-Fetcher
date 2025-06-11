@@ -49,7 +49,6 @@ indexes = [
     # ('BANKEX-I', 'BANKEX-I'),
     # ('BANKEX-II', 'BANKEX-II'),
     # ('BANKEX-III', 'BANKEX-III'),
-    
 ]
 
 

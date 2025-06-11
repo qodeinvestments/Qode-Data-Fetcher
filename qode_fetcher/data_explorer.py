@@ -52,7 +52,7 @@ def data_explorer(query_engine):
     with col2:
         exchange_filter = st.selectbox(
             "Exchange:",
-            options=["", "NSE", "BSE", "CBOE"]
+            options=["", "NSE", "BSE", "CBOE", "MCX"]
         )
     
     with col3:

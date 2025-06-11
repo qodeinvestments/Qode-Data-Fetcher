@@ -87,6 +87,9 @@ def render_candlestick_chart(df):
     for _, row in df_filtered.iterrows():
         timestamp = row[timestamp_col]
         
+        if any(pd.isna(row[col]) for col in [o_col, h_col, l_col, c_col]):
+            continue
+
         if isinstance(timestamp, str):
             try:
                 ts = pd.to_datetime(timestamp).timestamp()

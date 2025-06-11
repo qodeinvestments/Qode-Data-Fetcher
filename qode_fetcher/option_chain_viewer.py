@@ -115,7 +115,7 @@ def option_chain_viewer(query_engine):
     
     col1, col2, col3, col4 = st.columns([2, 3, 2, 2])
     
-    exchange_options = ["NSE", "BSE"]
+    exchange_options = ["NSE", "BSE", "MCX"]
     
     with col1:
         st.markdown("**Exchange**")
@@ -123,7 +123,7 @@ def option_chain_viewer(query_engine):
     
     with col2:
         st.markdown("**Underlying**")
-        underlying_options = get_underlyings(query_engine, selected_exchange, "Index")
+        underlying_options = get_underlyings(query_engine, selected_exchange, "Options")
         if underlying_options:
             selected_underlying = st.selectbox("", underlying_options, key="oc_underlying", label_visibility="collapsed")
         else:

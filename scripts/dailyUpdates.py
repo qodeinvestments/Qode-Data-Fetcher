@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_PATH = "/mnt/disk2/qode_edw_bp.db"
+DB_PATH = "/mnt/disk2/qode_edw.db"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 r = direct_redis.DirectRedis(host='localhost', port=6379, db=0)
 tdsymbolidTOsymbol = r.get('tdsymbolidTOsymbol')
-# print(f"Loaded {len(tdsymbolidTOsymbol)} symbol mappings from Redis")
 
 def get_connection():
     """Get database connection"""
