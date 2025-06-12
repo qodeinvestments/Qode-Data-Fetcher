@@ -73,7 +73,8 @@ def option_chain_viewer(query_engine):
             "",
             value=default_time,
             key="oc_time",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            step=60
         )
     
     selected_datetime = datetime.combine(selected_date, selected_time)

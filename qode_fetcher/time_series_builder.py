@@ -438,8 +438,6 @@ def handle_options_time_range_and_execution(query_engine, table_name, method_key
     st.markdown("### Time Range")
     col1, col2 = st.columns(2)
     
-    st.write(table_name)
-    
     earliest, latest, _ = get_table_timestamp_info(query_engine, table_name)
 
     with col1:
