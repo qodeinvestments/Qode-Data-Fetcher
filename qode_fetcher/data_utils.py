@@ -1,4 +1,6 @@
 import streamlit as st
+import json
+from pathlib import Path
 
 def get_underlyings(query_engine, exchange, instrument):
     try:
@@ -411,3 +413,29 @@ def build_option_chain_query(exchange, underlying, target_datetime, selected_exp
     """
     
     return final_query
+
+def load_event_days():
+    event_days_path = Path(__file__).parent / "event_days.json"
+    with open(event_days_path, "r") as f:
+        event_days = json.load(f)
+    return event_days
+
+def event_days_filter_ui(key1, key2):
+    event_days = load_event_days()
+    
+    event_titles = [f"{e['title']} ({e['date']})" for e in event_days]
+    st.markdown("#### Event Days Filter")
+    filter_option = st.selectbox(
+        "How to handle Event Days in Data Time Range?",
+        ["Include Event Days", "Exclude Event Days", "Only Event Days"],
+        key=key1
+    )
+    removed = st.multiselect(
+        "Temporarily remove specific Event Days:",
+        event_titles,
+        key=key2
+    )
+    filtered_event_days = [
+        e for i, e in enumerate(event_days) if event_titles[i] not in removed
+    ]
+    return filter_option, filtered_event_days

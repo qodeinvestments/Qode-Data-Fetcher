@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import zipfile
 import io
 import pandas as pd
-from data_utils import get_underlyings, get_table_name, get_table_columns, get_option_expiry_dates, get_option_strikes, get_option_tables_by_moneyness, get_option_tables_by_premium_percentage
+from data_utils import get_underlyings, get_table_name, get_table_columns, get_option_expiry_dates, get_option_strikes, get_option_tables_by_moneyness, get_option_tables_by_premium_percentage, event_days_filter_ui
 from query_builder import build_query
 from chart_renderer import has_candlestick_columns, render_candlestick_chart
 
@@ -129,6 +129,9 @@ def time_series_query_builder(query_engine):
         st.error("Start datetime must be before end datetime")
         return
     
+    filter_option, filtered_event_days = event_days_filter_ui(key1="time series", key2="time series multi")
+    event_dates = [e['date'] for e in filtered_event_days]
+    
     st.markdown("### Data Configuration")
     
     resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
@@ -187,7 +190,7 @@ def time_series_query_builder(query_engine):
                 execute_button = st.button("Execute Query", type="primary", key="ts_execute")
             
             if execute_button:
-                execute_time_series_query(query_engine, generated_query)
+                execute_time_series_query(query_engine, generated_query, filter_option, event_dates)
         else:
             st.error(f"Unable to fetch columns for table: {table_name}")
     else:
@@ -548,9 +551,17 @@ def get_default_columns(available_columns, instrument_type):
     else:
         return ["timestamp", "o", "h", "l", "c", "v"]
 
-def execute_time_series_query(query_engine, query):
+def execute_time_series_query(query_engine, query, filter_option, event_dates):
     with st.spinner("Executing query..."):
         result, exec_time, error = query_engine.execute_query(query)
+        
+        if not error and "timestamp" in result.columns:
+            result['date'] = pd.to_datetime(result['timestamp']).dt.date.astype(str)
+            if filter_option == "Exclude Event Days":
+                result = result[~result['date'].isin(event_dates)]
+            elif filter_option == "Only Event Days":
+                result = result[result['date'].isin(event_dates)]
+            result = result.drop(columns=["date"])
         
         if error:
             st.error(f"Query Error: {error}")
@@ -561,10 +572,22 @@ def execute_time_series_query(query_engine, query):
                 st.write(f"**Results: {len(result)} rows**")
                 st.dataframe(result)
                 
-                col1, col2 = st.columns(2)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     csv = result.to_csv(index=False)
-                    st.download_button("Download as CSV", csv, "ts_query_results.csv")
+                    st.download_button("Download as CSV", csv, "adv_query_results.csv")
+                
+                with col2:
+                    json_data = result.to_json(orient='records')
+                    st.download_button("Download as JSON", json_data, "adv_query_results.json")
+                    
+                with col3:
+                    parquet_file = result.to_parquet()
+                    st.download_button("Download as Parquet", parquet_file, "adv_query_results.parquet")
+                    
+                with col4:
+                    gzip_file = result.to_csv(compression='gzip')
+                    st.download_button("Download as Gzip CSV", gzip_file, "adv_query_results.csv.gz", mime="application/gzip")
                 
                 if has_candlestick_columns(result) and len(result) > 0:
                     st.subheader("Candlestick Preview")

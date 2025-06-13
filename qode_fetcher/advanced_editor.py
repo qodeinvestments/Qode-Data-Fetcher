@@ -1,6 +1,8 @@
 import streamlit as st
 from chart_renderer import has_candlestick_columns, has_line_chart_columns, render_appropriate_chart
 from sample_queries import get_sample_queries
+from data_utils import event_days_filter_ui
+import pandas as pd
 
 def advanced_query_editor(query_engine):
     st.markdown("""
@@ -35,16 +37,28 @@ def advanced_query_editor(query_engine):
         help="Only SELECT queries are allowed for security."
     )
     
+    filter_option, filtered_event_days = event_days_filter_ui(key1="sql select", key2='sql multi')
+    event_dates = [e['date'] for e in filtered_event_days]
+
     col1, col2 = st.columns([1, 4])
     with col1:
         execute_button = st.button("Execute Query", type="primary", key="adv_execute")
-    
+        
     if execute_button and sql_query.strip():
-        execute_advanced_query(query_engine, sql_query)
+        execute_advanced_query(query_engine, sql_query, filter_option, event_dates)
 
-def execute_advanced_query(query_engine, query):
+def execute_advanced_query(query_engine, query, filter_option, event_dates):
     with st.spinner("Executing query..."):
         result, exec_time, error = query_engine.execute_query(query)
+        
+        if not error and "timestamp" in result.columns:
+            result['date'] = pd.to_datetime(result['timestamp']).dt.date.astype(str)
+            if filter_option == "Exclude Event Days":
+                result = result[~result['date'].isin(event_dates)]
+            elif filter_option == "Only Event Days":
+                result = result[result['date'].isin(event_dates)]
+                
+            result = result.drop(columns=["date"])
         
         if error:
             st.error(f"Query Error: {error}")
@@ -72,7 +86,6 @@ def execute_advanced_query(query_engine, query):
                     gzip_file = result.to_csv(compression='gzip')
                     st.download_button("Download as Gzip CSV", gzip_file, "adv_query_results.csv.gz", mime="application/gzip")
                     
-                
                 if has_candlestick_columns(result) or has_line_chart_columns(result):
                     render_appropriate_chart(result)
                 
