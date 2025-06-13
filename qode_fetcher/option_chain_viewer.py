@@ -32,13 +32,13 @@ def option_chain_viewer(query_engine):
     
     with col1:
         st.markdown("**Exchange**")
-        selected_exchange = st.selectbox("", exchange_options, key="oc_exchange", label_visibility="collapsed")
+        selected_exchange = st.selectbox("Exchange", exchange_options, key="oc_exchange", label_visibility="collapsed")
     
     with col2:
         st.markdown("**Underlying**")
         underlying_options = get_underlyings(query_engine, selected_exchange, "Options")
         if underlying_options:
-            selected_underlying = st.selectbox("", underlying_options, key="oc_underlying", label_visibility="collapsed")
+            selected_underlying = st.selectbox("Underlying", underlying_options, key="oc_underlying", label_visibility="collapsed")
         else:
             st.error(f"No index data available for {selected_exchange}")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -60,7 +60,7 @@ def option_chain_viewer(query_engine):
     with col3:
         st.markdown("**Date**")
         selected_date = st.date_input(
-            "",
+            "Date",
             value=default_date,
             max_value=datetime.now().date(),
             key="oc_date",
@@ -70,7 +70,7 @@ def option_chain_viewer(query_engine):
     with col4:
         st.markdown("**Time**")
         selected_time = st.time_input(
-            "",
+            "Time Input",
             value=default_time,
             key="oc_time",
             label_visibility="collapsed",
@@ -93,7 +93,7 @@ def option_chain_viewer(query_engine):
     with col1:
         st.markdown("**Expiry Mode**")
         expiry_mode = st.selectbox(
-            "",
+            "Expiry Mode",
             ["Specific Date"],
             key="oc_expiry_mode",
             label_visibility="collapsed"
@@ -117,7 +117,7 @@ def option_chain_viewer(query_engine):
                     expiry_map[str(exp)] = exp
 
             selected_expiry_label = st.selectbox(
-                "",
+                "Exiry Date",
                 expiry_options,
                 key="oc_specific_expiry",
                 label_visibility="collapsed"
@@ -127,7 +127,7 @@ def option_chain_viewer(query_engine):
     with col3 if expiry_mode == "Specific Date" else col4:
         st.markdown("**Option Type**")
         option_type_filter = st.selectbox(
-            "",
+            "Option Type",
             ["All", "Call", "Put"],
             key="oc_type",
             label_visibility="collapsed"
@@ -136,7 +136,7 @@ def option_chain_viewer(query_engine):
     with col4 if expiry_mode == "Specific Date" else col5:
         st.markdown("**Strike Range (%)**")
         strike_range = st.slider(
-            "",
+            "Strike",
             min_value=1,
             max_value=50,
             value=5,
