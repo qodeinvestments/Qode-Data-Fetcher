@@ -8,7 +8,7 @@ from datetime import datetime
 class QueryEngine:
     def __init__(self, disk_conn):
         self.disk_conn = disk_conn
-        self.log_file = 'qode_fetcher/query_logs.jsonl'
+        self.log_file = 'query_logs.jsonl'
 
     def _log_query(self, user_email, query, status, execution_time, error=None):
         log_entry = {

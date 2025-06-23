@@ -15,3 +15,6 @@ streamlit-lightweight-charts
 streamlit-option-menu
 seaborn
 pyvollib
+streamlit-msal
+msal
+msal-streamlit-authentication

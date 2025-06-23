@@ -2,7 +2,7 @@ import streamlit as st
 import json
 from typing import Dict, Optional
 
-with open('qode_fetcher/users.json', 'r') as f:
+with open('users.json', 'r') as f:
       USERS = json.load(f)
 
 def verify_credentials(email: str, password: str) -> Optional[Dict]:

@@ -3,9 +3,9 @@ from datetime import datetime, timedelta
 import zipfile
 import io
 import pandas as pd
-from data_utils import get_underlyings, get_table_name, get_table_columns, get_option_expiry_dates, get_option_strikes, get_option_tables_by_moneyness, get_option_tables_by_premium_percentage, event_days_filter_ui
+from data_utils import get_underlyings, get_table_name, get_table_columns, get_option_expiry_dates, get_option_strikes, event_days_filter_ui
 from query_builder import build_query
-from chart_renderer import has_candlestick_columns, render_candlestick_chart
+from chart_renderer import has_candlestick_columns, has_line_chart_columns, render_appropriate_chart
 
 def get_table_timestamp_info(query_engine, table_name):
     try:
@@ -49,6 +49,14 @@ def format_interval(seconds):
         return f"{seconds/60:.1f}min"
     else:
         return f"{seconds/3600:.1f}hrs"
+
+def get_valid_columns_for_table(query_engine, table_name, requested_columns):
+    available_columns = get_table_columns(query_engine, table_name)
+    if not available_columns:
+        return []
+    
+    valid_columns = [col for col in requested_columns if col in available_columns]
+    return valid_columns
 
 def time_series_query_builder(query_engine):
     st.markdown("""
@@ -293,55 +301,113 @@ def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_un
     resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
     selected_resample = st.selectbox("Resample Interval:", resample_options, key="moneyness_resample")
     
-    table_names = get_option_tables_by_moneyness(query_engine, selected_exchange, selected_underlying, moneyness_type, percentage_value, option_type, start_datetime, end_datetime)
+    master_table = f"market_data.{selected_exchange}_Options_{selected_underlying}_Master"
+    available_columns = get_table_columns(query_engine, master_table.replace("market_data.", ""))
     
-    if not table_names:
-        st.warning("No option tables found for the specified moneyness criteria")
+    if not available_columns:
+        st.error(f"Unable to fetch columns for master table: {master_table}")
         return
     
-    st.info(f"Found {len(table_names)} option instruments matching criteria")
+    st.markdown("### Select Columns")
     
-    sample_table = table_names[0] if table_names else None
-    available_columns = get_table_columns(query_engine, sample_table) if sample_table else []
+    col1, col2 = st.columns([1, 3])
     
-    if available_columns:
-        st.markdown("### Select Columns")
+    with col1:
+        select_all = st.checkbox("Select All", key="moneyness_select_all")
         
-        col1, col2 = st.columns([1, 3])
-        
-        with col1:
-            select_all = st.checkbox("Select All", key="moneyness_select_all")
-            
-        with col2:
-            if select_all:
-                selected_columns = st.multiselect(
-                    "Columns:",
-                    available_columns,
-                    default=available_columns,
-                    key="moneyness_columns"
-                )
-            else:
-                default_cols = get_default_columns(available_columns, "Options")
-                selected_columns = st.multiselect(
-                    "Columns:",
-                    available_columns,
-                    default=[col for col in default_cols if col in available_columns],
-                    key="moneyness_columns"
-                )
-        
-        if not selected_columns:
-            st.warning("Please select at least one column")
-            return
-        
-        col1, col2 = st.columns([1, 4])
-        
-        with col1:
-            execute_button = st.button("Download All Tables as ZIP", type="primary", key="moneyness_execute")
-        
-        if execute_button:
-            execute_multiple_tables_query(query_engine, table_names, selected_columns, start_datetime, end_datetime, selected_resample, f"moneyness_{moneyness_type}_{percentage_value}pct")
+    with col2:
+        if select_all:
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=available_columns,
+                key="moneyness_columns"
+            )
+        else:
+            default_cols = get_default_columns(available_columns, "Options")
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=[col for col in default_cols if col in available_columns],
+                key="moneyness_columns"
+            )
+    
+    if not selected_columns:
+        st.warning("Please select at least one column")
+        return
+    
+    if moneyness_type == "ATM":
+        moneyness_condition = "ABS((strike - c) / c * 100) <= 1"
+    elif moneyness_type == "OTM":
+        if option_type.lower() == "call":
+            moneyness_condition = f"((strike - c) / c * 100) BETWEEN 0 AND {percentage_value}"
+        else:
+            moneyness_condition = f"((c - strike) / c * 100) BETWEEN 0 AND {percentage_value}"
     else:
-        st.error("Unable to fetch columns for option tables")
+        if option_type.lower() == "call":
+            moneyness_condition = f"((c - strike) / c * 100) BETWEEN 0 AND {percentage_value}"
+        else:
+            moneyness_condition = f"((strike - c) / c * 100) BETWEEN 0 AND {percentage_value}"
+    
+    columns_str = ", ".join(selected_columns)
+    
+    if selected_resample == "Raw Data":
+        generated_query = f"""
+        SELECT {columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        AND option_type = '{option_type.lower()}'
+        AND {moneyness_condition}
+        ORDER BY timestamp
+        """
+    else:
+        agg_columns = []
+        for col in selected_columns:
+            if col == "timestamp":
+                agg_columns.append(f"time_bucket(INTERVAL '{selected_resample}', timestamp) as timestamp")
+            elif col in ["open", "high", "low", "close", "c"]:
+                if col == "open":
+                    agg_columns.append("FIRST(open) as open")
+                elif col == "high":
+                    agg_columns.append("MAX(high) as high")
+                elif col == "low":
+                    agg_columns.append("MIN(low) as low")
+                elif col == "close":
+                    agg_columns.append("LAST(close) as close")
+                elif col == "c":
+                    agg_columns.append("LAST(c) as c")
+            elif col in ["symbol", "underlying", "expiry", "strike", "option_type"]:
+                agg_columns.append(f"FIRST({col}) as {col}")
+            else:
+                agg_columns.append(f"FIRST({col}) as {col}")
+        
+        agg_columns_str = ", ".join(agg_columns)
+        
+        generated_query = f"""
+        SELECT {agg_columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        AND option_type = '{option_type.lower()}'
+        AND {moneyness_condition}
+        GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry
+        ORDER BY timestamp
+        """
+    
+    st.markdown("### Generated Query")
+    generated_query = st.text_area(
+        "Generated Query",
+        value=generated_query.strip(),
+        height=len(generated_query.splitlines()) * 20 + 40,
+        key="moneyness_query"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        execute_button = st.button("Execute Query", type="primary", key="moneyness_execute")
+    
+    if execute_button:
+        execute_master_table_query(query_engine, generated_query, f"moneyness_{moneyness_type}_{percentage_value}pct")
 
 def handle_premium_percentage_view_with_info(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Premium Percentage Configuration")
@@ -387,55 +453,137 @@ def handle_premium_percentage_view_with_info(query_engine, selected_exchange, se
     resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
     selected_resample = st.selectbox("Resample Interval:", resample_options, key="premium_resample")
     
-    table_names = get_option_tables_by_premium_percentage(query_engine, selected_exchange, selected_underlying, premium_percentage, option_type, start_datetime, end_datetime)
+    master_table = f"market_data.{selected_exchange}_Options_{selected_underlying}_Master"
+    available_columns = get_table_columns(query_engine, master_table)
     
-    if not table_names:
-        st.warning("No option tables found for the specified premium percentage criteria")
+    if not available_columns:
+        st.error(f"Unable to fetch columns for master table: {master_table}")
         return
     
-    st.info(f"Found {len(table_names)} option instruments matching criteria")
+    st.markdown("### Select Columns")
     
-    sample_table = table_names[0] if table_names else None
-    available_columns = get_table_columns(query_engine, sample_table) if sample_table else None
+    col1, col2 = st.columns([1, 3])
     
-    if available_columns:
-        st.markdown("### Select Columns")
+    with col1:
+        select_all = st.checkbox("Select All", key="premium_select_all")
         
-        col1, col2 = st.columns([1, 3])
-        
-        with col1:
-            select_all = st.checkbox("Select All", key="premium_select_all")
-            
-        with col2:
-            if select_all:
-                selected_columns = st.multiselect(
-                    "Columns:",
-                    available_columns,
-                    default=available_columns,
-                    key="premium_columns"
-                )
-            else:
-                default_cols = get_default_columns(available_columns, "Options")
-                selected_columns = st.multiselect(
-                    "Columns:",
-                    available_columns,
-                    default=[col for col in default_cols if col in available_columns],
-                    key="premium_columns"
-                )
-        
-        if not selected_columns:
-            st.warning("Please select at least one column")
-            return
-        
-        col1, col2 = st.columns([1, 4])
-        
-        with col1:
-            execute_button = st.button("Download All Tables as ZIP", type="primary", key="premium_execute")
-        
-        if execute_button:
-            execute_multiple_tables_query(query_engine, table_names, selected_columns, start_datetime, end_datetime, selected_resample, f"premium_{premium_percentage}pct")
+    with col2:
+        if select_all:
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=available_columns,
+                key="premium_columns"
+            )
+        else:
+            default_cols = get_default_columns(available_columns, "Options")
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=[col for col in default_cols if col in available_columns],
+                key="premium_columns"
+            )
+    
+    if not selected_columns:
+        st.warning("Please select at least one column")
+        return
+    
+    premium_condition = f"(close / c * 100) BETWEEN {premium_percentage - 0.1} AND {premium_percentage + 0.1}"
+    
+    columns_str = ", ".join(selected_columns)
+    
+    if selected_resample == "Raw Data":
+        generated_query = f"""
+        SELECT {columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        AND option_type = '{option_type.lower()}'
+        AND {premium_condition}
+        ORDER BY timestamp
+        """
     else:
-        st.error("Unable to fetch columns for option tables")
+        agg_columns = []
+        for col in selected_columns:
+            if col == "timestamp":
+                agg_columns.append(f"time_bucket(INTERVAL '{selected_resample}', timestamp) as timestamp")
+            elif col in ["open", "high", "low", "close", "c"]:
+                if col == "open":
+                    agg_columns.append("FIRST(open) as open")
+                elif col == "high":
+                    agg_columns.append("MAX(high) as high")
+                elif col == "low":
+                    agg_columns.append("MIN(low) as low")
+                elif col == "close":
+                    agg_columns.append("LAST(close) as close")
+                elif col == "c":
+                    agg_columns.append("LAST(c) as c")
+            elif col in ["symbol", "underlying", "expiry", "strike", "option_type"]:
+                agg_columns.append(f"FIRST({col}) as {col}")
+            else:
+                agg_columns.append(f"FIRST({col}) as {col}")
+        
+        agg_columns_str = ", ".join(agg_columns)
+        
+        generated_query = f"""
+        SELECT {agg_columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        AND option_type = '{option_type.lower()}'
+        AND {premium_condition}
+        GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry
+        ORDER BY timestamp
+        """
+    
+    st.markdown("### Generated Query")
+    generated_query = st.text_area(
+        "Generated Query",
+        value=generated_query.strip(),
+        height=len(generated_query.splitlines()) * 20 + 40,
+        key="premium_query"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        execute_button = st.button("Execute Query", type="primary", key="premium_execute")
+    
+    if execute_button:
+        execute_master_table_query(query_engine, generated_query, f"premium_{premium_percentage}pct")
+
+def execute_master_table_query(query_engine, query, file_prefix):
+    with st.spinner("Executing query..."):
+        result, exec_time, error = query_engine.execute_query(query)
+        
+        if error:
+            st.error(f"Query Error: {error}")
+        else:
+            st.success(f"Query executed successfully in {exec_time:.2f} seconds")
+            
+            if len(result) > 0:
+                st.write(f"**Results: {len(result)} rows**")
+                st.dataframe(result)
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    csv = result.to_csv(index=False)
+                    st.download_button(f"Download as CSV", csv, f"{file_prefix}_options_data.csv")
+                
+                with col2:
+                    json_data = result.to_json(orient='records')
+                    st.download_button("Download as JSON", json_data, f"{file_prefix}_options_data.json")
+                    
+                with col3:
+                    parquet_file = result.to_parquet()
+                    st.download_button("Download as Parquet", parquet_file, f"{file_prefix}_options_data.parquet")
+                    
+                with col4:
+                    gzip_file = result.to_csv(compression='gzip')
+                    st.download_button("Download as Gzip CSV", gzip_file, f"{file_prefix}_options_data.csv.gz", mime="application/gzip")
+                
+                if has_candlestick_columns(result) or has_line_chart_columns(result):
+                    render_appropriate_chart(result)
+            else:
+                st.info("Query returned no results")
 
 def handle_options_time_range_and_execution(query_engine, table_name, method_key):
     st.markdown("### Time Range")
@@ -476,6 +624,9 @@ def handle_options_time_range_and_execution(query_engine, table_name, method_key
     if start_datetime >= end_datetime:
         st.error("Start datetime must be before end datetime")
         return
+    
+    filter_option, filtered_event_days = event_days_filter_ui(key1=f"{method_key} time series", key2=f"{method_key} time series multi")
+    event_dates = [e['date'] for e in filtered_event_days]
     
     st.markdown("### Data Configuration")
     
@@ -537,7 +688,7 @@ def handle_options_time_range_and_execution(query_engine, table_name, method_key
             execute_button = st.button("Execute Query", type="primary", key=f"{method_key}_execute")
         
         if execute_button:
-            execute_time_series_query(query_engine, generated_query)
+            execute_time_series_query(query_engine, generated_query, filter_option, event_dates)
     else:
         st.error(f"Unable to fetch columns for table: {table_name}")
 
@@ -589,46 +740,103 @@ def execute_time_series_query(query_engine, query, filter_option, event_dates):
                     gzip_file = result.to_csv(compression='gzip')
                     st.download_button("Download as Gzip CSV", gzip_file, "adv_query_results.csv.gz", mime="application/gzip")
                 
-                if has_candlestick_columns(result) and len(result) > 0:
-                    st.subheader("Candlestick Preview")
-                    render_candlestick_chart(result)
+                if has_candlestick_columns(result) or has_line_chart_columns(result):
+                    render_appropriate_chart(result)
             else:
                 st.info("Query returned no results")
 
 def execute_multiple_tables_query(query_engine, table_names, selected_columns, start_datetime, end_datetime, selected_resample, file_prefix):
-    with st.spinner(f"Executing queries for {len(table_names)} tables..."):
+    total_tables = len(table_names)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    successful_tables = 0
+    failed_tables = 0
+    tables_with_no_data = 0
+    error_log = []
+    
+    with st.spinner(f"Processing {total_tables} tables..."):
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for i, table_name in enumerate(table_names):
-                generated_query = build_query(
-                    table_name, 
-                    selected_columns, 
-                    start_datetime, 
-                    end_datetime, 
-                    selected_resample,
-                    "Options"
-                )
-                
-                result, exec_time, error = query_engine.execute_query(generated_query)
-                
-                if error:
-                    st.warning(f"Error in table {table_name}: {error}")
-                    continue
-                
-                if len(result) > 0:
+                try:
+                    progress_percent = (i + 1) / total_tables
+                    progress_bar.progress(progress_percent)
+                    status_text.text(f"Processing table {i+1}/{total_tables}: {table_name}")
+                    
+                    valid_columns = get_valid_columns_for_table(query_engine, table_name, selected_columns)
+                    
+                    if not valid_columns:
+                        error_msg = f"No valid columns found for table {table_name}"
+                        error_log.append(error_msg)
+                        failed_tables += 1
+                        continue
+                    
+                    missing_columns = set(selected_columns) - set(valid_columns)
+                    if missing_columns:
+                        error_log.append(f"Table {table_name}: Missing columns {', '.join(missing_columns)}")
+                    
+                    generated_query = build_query(
+                        table_name, 
+                        valid_columns, 
+                        start_datetime, 
+                        end_datetime, 
+                        selected_resample,
+                        "Options"
+                    )
+                    
+                    result, exec_time, error = query_engine.execute_query(generated_query)
+                    
+                    if error:
+                        error_msg = f"Query error for {table_name}: {error}"
+                        error_log.append(error_msg)
+                        failed_tables += 1
+                        continue
+                    
+                    if len(result) == 0:
+                        error_log.append(f"No data returned for table {table_name}")
+                        tables_with_no_data += 1
+                        continue
+                    
                     csv_data = result.to_csv(index=False)
                     zip_file.writestr(f"{table_name}.csv", csv_data)
-                
-                if i % 10 == 0:
-                    st.write(f"Processed {i+1}/{len(table_names)} tables...")
+                    successful_tables += 1
+                    
+                except Exception as e:
+                    error_msg = f"Unexpected error processing {table_name}: {str(e)}"
+                    error_log.append(error_msg)
+                    failed_tables += 1
         
         zip_buffer.seek(0)
-        
-        st.success(f"Successfully processed {len(table_names)} tables")
+    
+    progress_bar.progress(1.0)
+    status_text.text("Processing complete!")
+    
+    st.markdown("### Processing Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Tables", total_tables)
+    with col2:
+        st.metric("Successful", successful_tables, delta=None if successful_tables == 0 else f"{successful_tables/total_tables*100:.1f}%")
+    with col3:
+        st.metric("Failed", failed_tables, delta=None if failed_tables == 0 else f"-{failed_tables/total_tables*100:.1f}%")
+    with col4:
+        st.metric("No Data", tables_with_no_data, delta=None if tables_with_no_data == 0 else f"{tables_with_no_data/total_tables*100:.1f}%")
+    
+    if error_log:
+        with st.expander(f"View Errors and Warnings ({len(error_log)} items)", expanded=False):
+            for error in error_log:
+                st.text(error)
+    
+    if successful_tables > 0:
+        st.success(f"Successfully processed {successful_tables} out of {total_tables} tables")
         st.download_button(
-            label="Download ZIP file",
+            label=f"Download ZIP file ({successful_tables} files)",
             data=zip_buffer.getvalue(),
             file_name=f"{file_prefix}_options_data.zip",
             mime="application/zip"
         )
+    else:
+        st.error("No tables were successfully processed")

@@ -1,6 +1,11 @@
 import streamlit as st
 import json
 from pathlib import Path
+import os
+from typing import Dict, List
+
+
+UPLOAD_LOG_FILE = "upload_log.json"
 
 def get_underlyings(query_engine, exchange, instrument):
     try:
@@ -334,7 +339,6 @@ def build_option_chain_query(exchange, underlying, target_datetime, selected_exp
         symbol,
         strike,
         option_type,
-        underlying,
         open,
         high,
         low,
@@ -383,7 +387,6 @@ def build_option_chain_query(exchange, underlying, target_datetime, selected_exp
         symbol,
         strike,
         option_type,
-        underlying,
         open,
         high,
         low,
@@ -439,3 +442,15 @@ def event_days_filter_ui(key1, key2):
         e for i, e in enumerate(event_days) if event_titles[i] not in removed
     ]
     return filter_option, filtered_event_days
+
+def load_upload_log() -> List[Dict]:
+    if os.path.exists(UPLOAD_LOG_FILE):
+        with open(UPLOAD_LOG_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_upload_log(log_entry: Dict):
+    logs = load_upload_log()
+    logs.append(log_entry)
+    with open(UPLOAD_LOG_FILE, 'w') as f:
+        json.dump(logs, f, indent=2, default=str)

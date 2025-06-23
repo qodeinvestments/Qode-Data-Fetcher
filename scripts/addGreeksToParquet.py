@@ -569,8 +569,8 @@ class IndianOptionsCalculator:
 def main():
     calculator = IndianOptionsCalculator()
     
-    input_file = "/mnt/disk2/cold_storage/master_parquet_files/finnifty_options_master.parquet"
-    output_file = "/mnt/disk2/cold_storage/master_parquet_files/finnifty_options_processed.parquet"
+    input_file = "/mnt/disk2/cold_storage/master_parquet_files/banknifty_options_master.parquet"
+    output_file = "/mnt/disk2/cold_storage/master_parquet_files/banknifty_options_processed.parquet"
     
     try:        
         result_df = calculator.process_options_data(input_file, output_file)

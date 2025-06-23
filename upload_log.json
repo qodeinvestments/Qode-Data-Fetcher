@@ -1,0 +1,56 @@
+[
+  {
+    "timestamp": "2025-06-18T12:03:21.046105",
+    "user": "Jay Jain",
+    "file_name": "quarterly_listed_balancesheet_202503.xlsx",
+    "file_size_mb": 37.44657325744629,
+    "table_name": "NewTableeee",
+    "rows_ingested": 97071,
+    "columns_ingested": 41,
+    "processing_time_seconds": 268.9373321533203,
+    "dtype_conversions": {
+      "Company Name": "string",
+      "RBS_Date Range": "string",
+      "CONS_QTR_B_1": "string"
+    },
+    "is_quarterly_data": true,
+    "append_mode": false,
+    "quarterly_column": null
+  },
+  {
+    "timestamp": "2025-06-18T12:28:42.000148",
+    "user": "Jay Jain",
+    "file_name": "quarterly_listed_balancesheet_202503.xlsx",
+    "file_size_mb": 37.44657325744629,
+    "table_name": "JayyyTessst",
+    "rows_ingested": 97071,
+    "columns_ingested": 41,
+    "processing_time_seconds": 290.53041768074036,
+    "dtype_conversions": {
+      "Company Name": "string",
+      "RBS_Date Range": "string",
+      "CONS_QTR_B_1": "string"
+    },
+    "is_quarterly_data": true,
+    "append_mode": false,
+    "quarterly_column": null
+  },
+  {
+    "timestamp": "2025-06-18T13:42:54.717500",
+    "user": "Jay Jain",
+    "file_name": "quarterly_listed_balancesheet_202503.xlsx",
+    "file_size_mb": 37.44657325744629,
+    "table_name": "TESTJAY",
+    "rows_ingested": 97071,
+    "columns_ingested": 41,
+    "processing_time_seconds": 523.3416378498077,
+    "dtype_conversions": {
+      "Company Name": "string",
+      "RBS_Date Range": "string",
+      "CONS_QTR_B_1": "string"
+    },
+    "is_quarterly_data": true,
+    "append_mode": false,
+    "quarterly_column": null
+  }
+]

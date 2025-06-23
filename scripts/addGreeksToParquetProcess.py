@@ -253,7 +253,7 @@ def process_parquet_files():
             logger.info(f"Processing file: {file_path.name}")
             
             df = pd.read_parquet(file_path)
-            df = df.tail(100)
+            
             logger.info(f"Loaded {len(df)} records from {file_path.name}")
             
             required_columns = ['timestamp', 'symbol', 'c', 'expiry', 'strike', 

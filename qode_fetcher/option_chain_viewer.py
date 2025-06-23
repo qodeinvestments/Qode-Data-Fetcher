@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from data_utils import get_underlyings, build_option_chain_query, get_available_expiries, get_spot_price
 from app_styles import get_option_chain_styles
-from plots import create_advanced_analytics, create_greeks_analysis, create_oi_volume_charts, create_pcr_charts, create_price_movement_chart
+from plots import create_advanced_analytics, create_greeks_analysis
 
 def check_iv_greeks_columns(query_engine, exchange, underlying):
     check_query = f"""
@@ -196,7 +196,7 @@ def create_sensibull_option_chain(df, spot_price, prev_oi_df, has_iv, has_greeks
     
     strikes = sorted(df['strike'].unique())
     
-    iv_header = "<th>IV</th>" if has_iv else ""
+    iv_header = "<th>iv</th>" if has_iv else ""
     delta_header = "<th>Delta</th>" if has_greeks else ""
     gamma_header = "<th>Gamma</th>" if has_greeks else ""
     theta_header = "<th>Theta</th>" if has_greeks else ""
@@ -382,7 +382,7 @@ def fetch_enhanced_option_chain(query_engine, exchange, underlying, target_datet
                 st.metric("Total OI", f"{int(result['open_interest'].sum()):,}")
             st.success(f"Data loaded successfully in {exec_time:.2f} seconds")
             if has_iv or has_greeks:
-                st.info(f"Additional data available: {'IV' if has_iv else ''}{', Greeks' if has_greeks else ''}")
+                st.info(f"Additional data available: {'iv' if has_iv else ''}{', Greeks' if has_greeks else ''}")
 
         with tabs[1]:
             st.markdown('<div class="section-header">Option Chain</div>', unsafe_allow_html=True)

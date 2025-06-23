@@ -10,15 +10,16 @@ from data_ingestor import ingest_data
 conn = get_database_connection()
 query_engine = QueryEngine(conn)
 
-st.set_page_config(
-    page_title="Qode Data Fetcher",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 def main():
     if not require_authentication():
         return
+    
+    
+    st.set_page_config(
+        page_title="Qode Data Fetcher",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
     
     if conn is None:
         st.error("Unable to connect to database. Please check your connection.")
@@ -62,7 +63,7 @@ def main():
     elif selected == "Data Explorer":
         data_explorer(query_engine)
     elif selected == "Ingest Data":
-        ingest_data()
+        ingest_data(conn)
 
 if __name__ == "__main__":
     main()
