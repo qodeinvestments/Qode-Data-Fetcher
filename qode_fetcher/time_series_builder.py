@@ -207,7 +207,7 @@ def time_series_query_builder(query_engine):
 def handle_options_configuration(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Options Configuration")
     
-    option_methods = ["Single Instrument View", "Moneyness of an option", "Premium as a Percentage of Underlying"]
+    option_methods = ["Single Instrument View", "Moneyness of an option", "Premium as a Percentage of Underlying", "Delta of an Option"]
     selected_method = st.selectbox("Select Method:", option_methods)
     
     if selected_method == "Single Instrument View":
@@ -216,6 +216,8 @@ def handle_options_configuration(query_engine, selected_exchange, selected_under
         handle_moneyness_view_with_info(query_engine, selected_exchange, selected_underlying)
     elif selected_method == "Premium as a Percentage of Underlying":
         handle_premium_percentage_view_with_info(query_engine, selected_exchange, selected_underlying)
+    elif selected_method == "Delta of an Option":
+        handle_delta_of_option_view_with_info(query_engine, selected_exchange, selected_underlying)
 
 def handle_single_instrument_view_with_info(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Single Instrument Configuration")
@@ -244,11 +246,15 @@ def handle_single_instrument_view_with_info(query_engine, selected_exchange, sel
         selected_strike = st.selectbox("Strike Price:", strike_prices)
     
     with col3:
-        option_type = st.selectbox("Option Type:", ["Put", "Call"])
+        option_type = st.selectbox("Option Type:", ["Put", "Call", "Both"])
     
-    table_name = f"{selected_exchange}_Options_{selected_underlying}_{selected_expiry}_{int(selected_strike)}_{option_type.lower()}"
-    
-    handle_options_time_range_and_execution(query_engine, table_name, "single")
+    if option_type == "Both":
+        table_name_call = f"{selected_exchange}_Options_{selected_underlying}_{selected_expiry}_{int(selected_strike)}_call"
+        table_name_put = f"{selected_exchange}_Options_{selected_underlying}_{selected_expiry}_{int(selected_strike)}_put"
+        handle_options_time_range_and_execution(query_engine, [table_name_call, table_name_put], "single")
+    else:
+        table_name = f"{selected_exchange}_Options_{selected_underlying}_{selected_expiry}_{int(selected_strike)}_{option_type.lower()}"
+        handle_options_time_range_and_execution(query_engine, table_name, "single")
 
 def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Moneyness Configuration")
@@ -260,13 +266,21 @@ def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_un
     
     with col2:
         if moneyness_type == "ATM":
-            percentage_value = 0.0
-            st.number_input("Percentage:", value=0.0, disabled=True, key="moneyness_pct")
+            strike_diff_pct = st.number_input(
+                "Strike Difference %:",
+                min_value=0.0,
+                max_value=100.0,
+                value=5.0,
+                step=0.1,
+                key="atm_strike_diff_pct"
+            )
+            percentage_value = None  # Not used for ATM
         else:
             percentage_value = st.number_input("Percentage:", min_value=0.0, max_value=100.0, value=5.0, step=0.1, key="moneyness_pct")
+            strike_diff_pct = None
     
     with col3:
-        option_type = st.selectbox("Option Type:", ["Call", "Put"], key="moneyness_option_type")
+        option_type = st.selectbox("Option Type:", ["Call", "Put", "Both"], key="moneyness_option_type")
     
     st.markdown("### Time Range")
     col1, col2 = st.columns(2)
@@ -337,7 +351,7 @@ def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_un
         return
     
     if moneyness_type == "ATM":
-        moneyness_condition = "ABS((strike - c) / c * 100) <= 1"
+        moneyness_condition = f"ABS((strike - c) / c * 100) <= {strike_diff_pct}"
     elif moneyness_type == "OTM":
         if option_type.lower() == "call":
             moneyness_condition = f"((strike - c) / c * 100) BETWEEN 0 AND {percentage_value}"
@@ -350,16 +364,16 @@ def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_un
             moneyness_condition = f"((strike - c) / c * 100) BETWEEN 0 AND {percentage_value}"
     
     columns_str = ", ".join(selected_columns)
-    
+    option_type_filter = option_type.lower()
     if selected_resample == "Raw Data":
         generated_query = f"""
         SELECT {columns_str}
         FROM {master_table}
         WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
-        AND option_type = '{option_type.lower()}'
-        AND {moneyness_condition}
-        ORDER BY timestamp
         """
+        if option_type != "Both":
+            generated_query += f"AND option_type = '{option_type.lower()}'\n"
+        generated_query += f"AND {moneyness_condition}\nORDER BY timestamp"
     else:
         agg_columns = []
         for col in selected_columns:
@@ -380,18 +394,15 @@ def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_un
                 agg_columns.append(f"FIRST({col}) as {col}")
             else:
                 agg_columns.append(f"FIRST({col}) as {col}")
-        
         agg_columns_str = ", ".join(agg_columns)
-        
         generated_query = f"""
         SELECT {agg_columns_str}
         FROM {master_table}
         WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
-        AND option_type = '{option_type.lower()}'
-        AND {moneyness_condition}
-        GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry
-        ORDER BY timestamp
         """
+        if option_type != "Both":
+            generated_query += f"AND option_type = '{option_type.lower()}'\n"
+        generated_query += f"AND {moneyness_condition}\nGROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry\nORDER BY timestamp"
     
     st.markdown("### Generated Query")
     generated_query = st.text_area(
@@ -407,7 +418,9 @@ def handle_moneyness_view_with_info(query_engine, selected_exchange, selected_un
         execute_button = st.button("Execute Query", type="primary", key="moneyness_execute")
     
     if execute_button:
-        execute_master_table_query(query_engine, generated_query, f"moneyness_{moneyness_type}_{percentage_value}pct")
+        # For ATM, use strike_diff_pct in the file name, for others use percentage_value
+        suffix = f"atm_{strike_diff_pct}pct" if moneyness_type == "ATM" else f"{moneyness_type}_{percentage_value}pct"
+        execute_master_table_query(query_engine, generated_query, f"moneyness_{suffix}")
 
 def handle_premium_percentage_view_with_info(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Premium Percentage Configuration")
@@ -418,7 +431,7 @@ def handle_premium_percentage_view_with_info(query_engine, selected_exchange, se
         premium_percentage = st.number_input("Premium as % of Underlying:", min_value=0.0, max_value=100.0, value=2.0, step=0.1, key="premium_pct")
     
     with col2:
-        option_type = st.selectbox("Option Type:", ["Call", "Put"], key="premium_option_type")
+        option_type = st.selectbox("Option Type:", ["Call", "Put", "Both"], key="premium_option_type")
     
     st.markdown("### Time Range")
     col1, col2 = st.columns(2)
@@ -491,16 +504,16 @@ def handle_premium_percentage_view_with_info(query_engine, selected_exchange, se
     premium_condition = f"(close / c * 100) BETWEEN {premium_percentage - 0.1} AND {premium_percentage + 0.1}"
     
     columns_str = ", ".join(selected_columns)
-    
+    option_type_filter = option_type.lower()
     if selected_resample == "Raw Data":
         generated_query = f"""
         SELECT {columns_str}
         FROM {master_table}
         WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
-        AND option_type = '{option_type.lower()}'
-        AND {premium_condition}
-        ORDER BY timestamp
         """
+        if option_type != "Both":
+            generated_query += f"AND option_type = '{option_type.lower()}'\n"
+        generated_query += f"AND {premium_condition}\nORDER BY timestamp"
     else:
         agg_columns = []
         for col in selected_columns:
@@ -521,18 +534,15 @@ def handle_premium_percentage_view_with_info(query_engine, selected_exchange, se
                 agg_columns.append(f"FIRST({col}) as {col}")
             else:
                 agg_columns.append(f"FIRST({col}) as {col}")
-        
         agg_columns_str = ", ".join(agg_columns)
-        
         generated_query = f"""
         SELECT {agg_columns_str}
         FROM {master_table}
         WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
-        AND option_type = '{option_type.lower()}'
-        AND {premium_condition}
-        GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry
-        ORDER BY timestamp
         """
+        if option_type != "Both":
+            generated_query += f"AND option_type = '{option_type.lower()}'\n"
+        generated_query += f"AND {premium_condition}\nGROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry\nORDER BY timestamp"
     
     st.markdown("### Generated Query")
     generated_query = st.text_area(
@@ -550,6 +560,138 @@ def handle_premium_percentage_view_with_info(query_engine, selected_exchange, se
     if execute_button:
         execute_master_table_query(query_engine, generated_query, f"premium_{premium_percentage}pct")
 
+def handle_delta_of_option_view_with_info(query_engine, selected_exchange, selected_underlying):
+    st.markdown("### Delta of an Option Configuration")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        delta_value = st.number_input("Delta Value:", min_value=-1.0, max_value=1.0, value=0.5, step=0.01, key="delta_value")
+    with col2:
+        option_type = st.selectbox("Option Type:", ["Call", "Put", "Both"], key="delta_option_type")
+    
+    st.markdown("### Time Range")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        start_date = st.date_input(
+            "Start Date:",
+            value=datetime.now() - timedelta(days=30),
+            max_value=datetime.now().date(),
+            key="delta_start_date"
+        )
+        start_time = st.time_input("Start Time:", value=datetime.strptime("09:15:00", "%H:%M:%S").time(), key="delta_start_time")
+    with col2:
+        end_date = st.date_input(
+            "End Date:",
+            value=datetime.now().date(),
+            max_value=datetime.now().date(),
+            key="delta_end_date"
+        )
+        end_time = st.time_input("End Time:", value=datetime.strptime("15:30:00", "%H:%M:%S").time(), key="delta_end_time")
+    
+    start_datetime = datetime.combine(start_date, start_time)
+    end_datetime = datetime.combine(end_date, end_time)
+    
+    if start_datetime >= end_datetime:
+        st.error("Start datetime must be before end datetime")
+        return
+    
+    st.markdown("### Data Configuration")
+    resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
+    selected_resample = st.selectbox("Resample Interval:", resample_options, key="delta_resample")
+    
+    master_table = f"market_data.{selected_exchange}_Options_{selected_underlying}_Master"
+    available_columns = get_table_columns(query_engine, master_table.replace("market_data.", ""))
+    
+    if not available_columns:
+        st.error(f"Unable to fetch columns for master table: {master_table}")
+        return
+    
+    if "delta" not in available_columns:
+        st.warning("The selected table does not have a 'delta' column. Please choose another method or table.")
+        return
+    
+    st.markdown("### Select Columns")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        select_all = st.checkbox("Select All", key="delta_select_all")
+    with col2:
+        if select_all:
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=available_columns,
+                key="delta_columns"
+            )
+        else:
+            default_cols = get_default_columns(available_columns, "Options")
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=[col for col in default_cols if col in available_columns],
+                key="delta_columns"
+            )
+    
+    if not selected_columns:
+        st.warning("Please select at least one column")
+        return
+    
+    delta_condition = f"ABS(delta - {delta_value}) <= 0.01"
+    columns_str = ", ".join(selected_columns)
+    if selected_resample == "Raw Data":
+        generated_query = f"""
+        SELECT {columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        """
+        if option_type != "Both":
+            generated_query += f"AND option_type = '{option_type.lower()}'\n"
+        generated_query += f"AND {delta_condition}\nORDER BY timestamp"
+    else:
+        agg_columns = []
+        for col in selected_columns:
+            if col == "timestamp":
+                agg_columns.append(f"time_bucket(INTERVAL '{selected_resample}', timestamp) as timestamp")
+            elif col in ["open", "high", "low", "close", "c"]:
+                if col == "open":
+                    agg_columns.append("FIRST(open) as open")
+                elif col == "high":
+                    agg_columns.append("MAX(high) as high")
+                elif col == "low":
+                    agg_columns.append("MIN(low) as low")
+                elif col == "close":
+                    agg_columns.append("LAST(close) as close")
+                elif col == "c":
+                    agg_columns.append("LAST(c) as c")
+            elif col in ["symbol", "underlying", "expiry", "strike", "option_type"]:
+                agg_columns.append(f"FIRST({col}) as {col}")
+            else:
+                agg_columns.append(f"FIRST({col}) as {col}")
+        agg_columns_str = ", ".join(agg_columns)
+        generated_query = f"""
+        SELECT {agg_columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        """
+        if option_type != "Both":
+            generated_query += f"AND option_type = '{option_type.lower()}'\n"
+        generated_query += f"AND {delta_condition}\nGROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry\nORDER BY timestamp"
+    
+    st.markdown("### Generated Query")
+    generated_query = st.text_area(
+        "Generated Query",
+        value=generated_query.strip(),
+        height=len(generated_query.splitlines()) * 20 + 40,
+        key="delta_query"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        execute_button = st.button("Execute Query", type="primary", key="delta_execute")
+    if execute_button:
+        execute_master_table_query(query_engine, generated_query, f"delta_{delta_value}")
+
 def execute_master_table_query(query_engine, query, file_prefix):
     with st.spinner("Executing query..."):
         result, exec_time, error = query_engine.execute_query(query)
@@ -561,7 +703,6 @@ def execute_master_table_query(query_engine, query, file_prefix):
             
             if len(result) > 0:
                 st.write(f"**Results: {len(result)} rows**")
-                st.dataframe(result)
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -580,69 +721,86 @@ def execute_master_table_query(query_engine, query, file_prefix):
                     gzip_file = result.to_csv(compression='gzip')
                     st.download_button("Download as Gzip CSV", gzip_file, f"{file_prefix}_options_data.csv.gz", mime="application/gzip")
                 
+                st.dataframe(result)
+                
                 if has_candlestick_columns(result) or has_line_chart_columns(result):
                     render_appropriate_chart(result)
             else:
                 st.info("Query returned no results")
 
 def handle_options_time_range_and_execution(query_engine, table_name, method_key):
-    st.markdown("### Time Range")
-    col1, col2 = st.columns(2)
-    
-    earliest, latest, _ = get_table_timestamp_info(query_engine, table_name)
-
-    with col1:
-        start_date = st.date_input(
-            "Start Date:",
-            value=earliest.date() if earliest else (datetime.now() - timedelta(days=30)).date(),
-            min_value=datetime(2000, 1, 1).date(),
-            max_value=datetime.now().date(),
-            key=f"{method_key}_start_date"
-        )
-        start_time = st.time_input(
-            "Start Time:",
-            value=earliest.time() if earliest else datetime.strptime("09:15:00", "%H:%M:%S").time(),
-            key=f"{method_key}_start_time"
-        )
-
-    with col2:
-        end_date = st.date_input(
-            "End Date:",
-            value=latest.date() if latest else datetime.now().date(),
-            max_value=datetime.now().date(),
-            key=f"{method_key}_end_date"
-        )
-        end_time = st.time_input(
-            "End Time:",
-            value=latest.time() if latest else datetime.strptime("15:30:00", "%H:%M:%S").time(),
-            key=f"{method_key}_end_time"
-        )
-    
-    start_datetime = datetime.combine(start_date, start_time)
-    end_datetime = datetime.combine(end_date, end_time)
-    
-    if start_datetime >= end_datetime:
-        st.error("Start datetime must be before end datetime")
-        return
-    
-    filter_option, filtered_event_days = event_days_filter_ui(key1=f"{method_key} time series", key2=f"{method_key} time series multi")
-    event_dates = [e['date'] for e in filtered_event_days]
-    
-    st.markdown("### Data Configuration")
-    
-    resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
-    selected_resample = st.selectbox("Resample Interval:", resample_options, key=f"{method_key}_resample")
-    
-    available_columns = get_table_columns(query_engine, table_name)
-    
-    if available_columns:
+    # If table_name is a list (Both), create a single concatenated query
+    if isinstance(table_name, list):
+        # Get UI parameters from both tables to find earliest start and latest end
+        earliest_start = None
+        latest_end = None
+        
+        for tname in table_name:
+            earliest, latest, _ = get_table_timestamp_info(query_engine, tname)
+            if earliest and latest:
+                if earliest_start is None or earliest < earliest_start:
+                    earliest_start = earliest
+                if latest_end is None or latest > latest_end:
+                    latest_end = latest
+        
+        # If no valid timestamps found, use defaults
+        if earliest_start is None:
+            earliest_start = datetime.now() - timedelta(days=30)
+        if latest_end is None:
+            latest_end = datetime.now()
+        
+        available_columns = get_table_columns(query_engine, table_name[0])
+        
+        if not available_columns:
+            st.error(f"Unable to fetch columns for table: {table_name[0]}")
+            return
+        
+        st.markdown("### Time Range")
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input(
+                "Start Date:",
+                value=earliest_start.date(),
+                min_value=datetime(2000, 1, 1).date(),
+                max_value=datetime.now().date(),
+                key=f"{method_key}_start_date"
+            )
+            start_time = st.time_input(
+                "Start Time:",
+                value=earliest_start.time(),
+                key=f"{method_key}_start_time"
+            )
+        with col2:
+            end_date = st.date_input(
+                "End Date:",
+                value=latest_end.date(),
+                max_value=datetime.now().date(),
+                key=f"{method_key}_end_date"
+            )
+            end_time = st.time_input(
+                "End Time:",
+                value=latest_end.time(),
+                key=f"{method_key}_end_time"
+            )
+        
+        start_datetime = datetime.combine(start_date, start_time)
+        end_datetime = datetime.combine(end_date, end_time)
+        
+        if start_datetime >= end_datetime:
+            st.error("Start datetime must be before end datetime")
+            return
+        
+        filter_option, filtered_event_days = event_days_filter_ui(key1=f"{method_key} time series", key2=f"{method_key} time series multi")
+        event_dates = [e['date'] for e in filtered_event_days]
+        
+        st.markdown("### Data Configuration")
+        resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
+        selected_resample = st.selectbox("Resample Interval:", resample_options, key=f"{method_key}_resample")
+        
         st.markdown("### Select Columns")
-        
         col1, col2 = st.columns([1, 3])
-        
         with col1:
             select_all = st.checkbox("Select All", key=f"{method_key}_select_all")
-            
         with col2:
             if select_all:
                 selected_columns = st.multiselect(
@@ -664,33 +822,217 @@ def handle_options_time_range_and_execution(query_engine, table_name, method_key
             st.warning("Please select at least one column")
             return
         
-        st.markdown("### Generated Query")
+        st.markdown("### Generated Query (Call & Put Combined)")
         
-        generated_query = build_query(
-            table_name, 
-            selected_columns, 
-            start_datetime, 
-            end_datetime, 
-            selected_resample,
-            "Options"
-        )
+        # Create a single concatenated query with UNION ALL
+        if selected_resample == "Raw Data":
+            # For raw data, use UNION ALL to concatenate both tables
+            call_table = table_name[0]  # call table
+            put_table = table_name[1]   # put table
+            
+            columns_with_type_call = ", ".join([f'"{col}"' for col in selected_columns]) + ", 'call' as option_type"
+            columns_with_type_put = ", ".join([f'"{col}"' for col in selected_columns]) + ", 'put' as option_type"
+            
+            generated_query = f"""
+            SELECT {columns_with_type_call}
+            FROM market_data.{call_table}
+            WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+            UNION ALL
+            SELECT {columns_with_type_put}
+            FROM market_data.{put_table}
+            WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+            ORDER BY timestamp
+            """
+        else:
+            # For resampled data, need to handle aggregation properly
+            call_table = table_name[0]  # call table
+            put_table = table_name[1]   # put table
+            
+            # Build aggregation columns for both tables
+            agg_columns = []
+            for col in selected_columns:
+                if col == "timestamp":
+                    agg_columns.append(f"time_bucket(INTERVAL '{selected_resample}', timestamp) as timestamp")
+                elif col in ["open", "high", "low", "close", "c"]:
+                    if col == "open":
+                        agg_columns.append("FIRST(open) as open")
+                    elif col == "high":
+                        agg_columns.append("MAX(high) as high")
+                    elif col == "low":
+                        agg_columns.append("MIN(low) as low")
+                    elif col == "close":
+                        agg_columns.append("LAST(close) as close")
+                    elif col == "c":
+                        agg_columns.append("LAST(c) as c")
+                elif col in ["symbol", "underlying", "expiry", "strike"]:
+                    agg_columns.append(f"FIRST({col}) as {col}")
+                else:
+                    agg_columns.append(f"FIRST({col}) as {col}")
+            
+            agg_columns_str = ", ".join(agg_columns)
+            
+            generated_query = f"""
+            SELECT {agg_columns_str}, 'call' as option_type
+            FROM market_data.{call_table}
+            WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+            GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp)
+            UNION ALL
+            SELECT {agg_columns_str}, 'put' as option_type
+            FROM market_data.{put_table}
+            WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+            GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp)
+            ORDER BY timestamp
+            """
         
-        generated_query = st.text_area(
-            "Generated Query",
+        st.text_area(
+            "Generated Query (Call & Put Combined)",
             value=generated_query.strip(),
             height=len(generated_query.splitlines()) * 20 + 40,
             key=f"{method_key}_query"
         )
         
         col1, col2 = st.columns([1, 4])
-        
         with col1:
             execute_button = st.button("Execute Query", type="primary", key=f"{method_key}_execute")
         
         if execute_button:
-            execute_time_series_query(query_engine, generated_query, filter_option, event_dates)
+            with st.spinner("Executing combined query..."):
+                result, exec_time, error = query_engine.execute_query(generated_query)
+                
+                if error:
+                    st.error(f"Query Error: {error}")
+                else:
+                    st.success(f"Query executed successfully in {exec_time:.2f} seconds")
+                    
+                    if len(result) > 0:
+                        st.write(f"**Results: {len(result)} rows (Call & Put combined)**")
+                        st.dataframe(result)
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            csv = result.to_csv(index=False)
+                            st.download_button("Download as CSV", csv, "adv_query_results_both.csv")
+                        with col2:
+                            json_data = result.to_json(orient='records')
+                            st.download_button("Download as JSON", json_data, "adv_query_results_both.json")
+                        with col3:
+                            parquet_file = result.to_parquet()
+                            st.download_button("Download as Parquet", parquet_file, "adv_query_results_both.parquet")
+                        with col4:
+                            gzip_file = result.to_csv(compression='gzip')
+                            st.download_button("Download as Gzip CSV", gzip_file, "adv_query_results_both.csv.gz", mime="application/gzip")
+                        
+                        if has_candlestick_columns(result) or has_line_chart_columns(result):
+                            render_appropriate_chart(result)
+                    else:
+                        st.info("Query returned no results for either Call or Put.")
     else:
-        st.error(f"Unable to fetch columns for table: {table_name}")
+        # Original logic for single table
+        st.markdown("### Time Range")
+        col1, col2 = st.columns(2)
+        
+        earliest, latest, _ = get_table_timestamp_info(query_engine, table_name)
+
+        with col1:
+            start_date = st.date_input(
+                "Start Date:",
+                value=earliest.date() if earliest else (datetime.now() - timedelta(days=30)).date(),
+                min_value=datetime(2000, 1, 1).date(),
+                max_value=datetime.now().date(),
+                key=f"{method_key}_start_date"
+            )
+            start_time = st.time_input(
+                "Start Time:",
+                value=earliest.time() if earliest else datetime.strptime("09:15:00", "%H:%M:%S").time(),
+                key=f"{method_key}_start_time"
+            )
+
+        with col2:
+            end_date = st.date_input(
+                "End Date:",
+                value=latest.date() if latest else datetime.now().date(),
+                max_value=datetime.now().date(),
+                key=f"{method_key}_end_date"
+            )
+            end_time = st.time_input(
+                "End Time:",
+                value=latest.time() if latest else datetime.strptime("15:30:00", "%H:%M:%S").time(),
+                key=f"{method_key}_end_time"
+            )
+        
+        start_datetime = datetime.combine(start_date, start_time)
+        end_datetime = datetime.combine(end_date, end_time)
+        
+        if start_datetime >= end_datetime:
+            st.error("Start datetime must be before end datetime")
+            return
+        
+        filter_option, filtered_event_days = event_days_filter_ui(key1=f"{method_key} time series", key2=f"{method_key} time series multi")
+        event_dates = [e['date'] for e in filtered_event_days]
+        
+        st.markdown("### Data Configuration")
+        
+        resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
+        selected_resample = st.selectbox("Resample Interval:", resample_options, key=f"{method_key}_resample")
+        
+        available_columns = get_table_columns(query_engine, table_name)
+        
+        if available_columns:
+            st.markdown("### Select Columns")
+            
+            col1, col2 = st.columns([1, 3])
+            
+            with col1:
+                select_all = st.checkbox("Select All", key=f"{method_key}_select_all")
+                
+            with col2:
+                if select_all:
+                    selected_columns = st.multiselect(
+                        "Columns:",
+                        available_columns,
+                        default=available_columns,
+                        key=f"{method_key}_columns"
+                    )
+                else:
+                    default_cols = get_default_columns(available_columns, "Options")
+                    selected_columns = st.multiselect(
+                        "Columns:",
+                        available_columns,
+                        default=[col for col in default_cols if col in available_columns],
+                        key=f"{method_key}_columns"
+                    )
+            
+            if not selected_columns:
+                st.warning("Please select at least one column")
+                return
+            
+            st.markdown("### Generated Query")
+            
+            generated_query = build_query(
+                table_name, 
+                selected_columns, 
+                start_datetime, 
+                end_datetime, 
+                selected_resample,
+                "Options"
+            )
+            
+            generated_query = st.text_area(
+                "Generated Query",
+                value=generated_query.strip(),
+                height=len(generated_query.splitlines()) * 20 + 40,
+                key=f"{method_key}_query"
+            )
+            
+            col1, col2 = st.columns([1, 4])
+            
+            with col1:
+                execute_button = st.button("Execute Query", type="primary", key=f"{method_key}_execute")
+            
+            if execute_button:
+                execute_time_series_query(query_engine, generated_query, filter_option, event_dates)
+        else:
+            st.error(f"Unable to fetch columns for table: {table_name}")
 
 def get_default_columns(available_columns, instrument_type):
     if instrument_type == "Futures":

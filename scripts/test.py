@@ -183,14 +183,61 @@ def calculate_time_to_expiry_minutes(timestamp, expiry_date):
     
     return time_diff.total_seconds() / 60
 
-def process_options_chunk(chunk_df, risk_free_rate=0.065):
+def calculate_greeks_worker(args):
     """
-    Process a chunk of options data to calculate IV and Greeks
+    Worker function for multiprocessing to calculate IV and Greeks for a single row
+    """
+    row, risk_free_rate = args
+    
+    try:
+        # Calculate time to expiry
+        time_to_expiry_minutes = calculate_time_to_expiry_minutes(row['timestamp'], row['expiry'])
+        time_to_expiry_years = time_to_expiry_minutes / (365 * 24 * 60)
+        
+        if time_to_expiry_years <= 0 or pd.isna(row['c']) or pd.isna(row['close']):
+            return {
+                'iv': np.nan, 'delta': np.nan, 'gamma': np.nan, 
+                'theta': np.nan, 'vega': np.nan, 'rho': np.nan
+            }
+        
+        # Calculate implied volatility
+        iv = newton_raphson_iv(
+            row['close'], row['c'], row['strike'], 
+            time_to_expiry_years, risk_free_rate, row['option_type']
+        )
+        
+        if pd.isna(iv) or iv <= 0:
+            return {
+                'iv': np.nan, 'delta': np.nan, 'gamma': np.nan, 
+                'theta': np.nan, 'vega': np.nan, 'rho': np.nan
+            }
+        
+        # Calculate Greeks
+        greeks_dict = calculate_greeks_custom(
+            row['c'], row['strike'], time_to_expiry_years,
+            risk_free_rate, iv, row['option_type']
+        )
+        
+        greeks_dict['iv'] = iv
+        return greeks_dict
+        
+    except Exception as e:
+        logger.debug(f"Error calculating Greeks for row: {e}")
+        return {
+            'iv': np.nan, 'delta': np.nan, 'gamma': np.nan, 
+            'theta': np.nan, 'vega': np.nan, 'rho': np.nan
+        }
+
+def process_options_chunk_mp(chunk_df, risk_free_rate=0.065, num_processes=None):
+    """
+    Process a chunk of options data to calculate IV and Greeks using multiprocessing
     chunk_df: DataFrame chunk with columns [timestamp, open, high, low, close, c, expiry, strike, symbol, option_type]
     risk_free_rate: Risk-free rate (default 0.065)
+    num_processes: Number of processes to use (default None = use all available cores)
     """
     result_df = chunk_df.copy()
     
+    # Filter out rows with missing underlying prices
     mask = ~pd.isna(result_df['c'])
     
     if not mask.any():
@@ -199,63 +246,39 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
     
     valid_data = result_df[mask].copy()
     
+    # Convert timestamps
     valid_data['timestamp'] = pd.to_datetime(valid_data['timestamp'])
     valid_data['expiry'] = pd.to_datetime(valid_data['expiry'])
     
-    valid_data['time_to_expiry_minutes'] = valid_data.apply(
-        lambda row: calculate_time_to_expiry_minutes(row['timestamp'], row['expiry']), axis=1
-    )
+    # Prepare arguments for multiprocessing
+    args_list = [(row, risk_free_rate) for _, row in valid_data.iterrows()]
     
-    valid_data['time_to_expiry_years'] = valid_data['time_to_expiry_minutes'] / (365 * 24 * 60)
+    # Use multiprocessing to calculate Greeks
+    if num_processes is None:
+        num_processes = mp.cpu_count()
     
-    active_mask = valid_data['time_to_expiry_years'] > 0
+    logger.info(f"Processing {len(args_list)} rows using {num_processes} processes")
     
-    valid_data.loc[:, 'iv'] = np.nan
-    valid_data.loc[:, 'delta'] = np.nan
-    valid_data.loc[:, 'gamma'] = np.nan
-    valid_data.loc[:, 'theta'] = np.nan
-    valid_data.loc[:, 'vega'] = np.nan
-    valid_data.loc[:, 'rho'] = np.nan
+    with mp.Pool(processes=num_processes) as pool:
+        results = pool.map(calculate_greeks_worker, args_list)
     
-    if active_mask.any():
-        active_data = valid_data[active_mask].copy()
-        
-        iv_results = []
-        for idx, row in active_data.iterrows():
-            try:
-                iv = newton_raphson_iv(
-                    row['close'], row['c'], row['strike'], 
-                    row['time_to_expiry_years'], risk_free_rate, row['option_type']
-                )
-                iv_results.append(iv)
-            except:
-                iv_results.append(np.nan)
-        
-        valid_data.loc[active_mask, 'iv'] = iv_results
-        
-        iv_valid_mask = active_mask & ~pd.isna(valid_data['iv']) & (valid_data['iv'] > 0)
-        
-        if iv_valid_mask.any():
-            iv_valid_data = valid_data[iv_valid_mask].copy()
-            
-            greeks_results = []
-            for idx, row in iv_valid_data.iterrows():
-                try:
-                    greeks_dict = calculate_greeks_custom(
-                        row['c'], row['strike'], row['time_to_expiry_years'],
-                        risk_free_rate, row['iv'], row['option_type']
-                    )
-                    greeks_results.append(greeks_dict)
-                except:
-                    greeks_results.append({
-                        'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 
-                        'vega': np.nan, 'rho': np.nan
-                    })
-            
-            for i, (idx, _) in enumerate(iv_valid_data.iterrows()):
-                for greek in ['delta', 'gamma', 'theta', 'vega', 'rho']:
-                    valid_data.loc[idx, greek] = greeks_results[i][greek]
+    # Extract results
+    iv_values = [r['iv'] for r in results]
+    delta_values = [r['delta'] for r in results]
+    gamma_values = [r['gamma'] for r in results]
+    theta_values = [r['theta'] for r in results]
+    vega_values = [r['vega'] for r in results]
+    rho_values = [r['rho'] for r in results]
     
+    # Update the valid data with calculated values
+    valid_data['iv'] = iv_values
+    valid_data['delta'] = delta_values
+    valid_data['gamma'] = gamma_values
+    valid_data['theta'] = theta_values
+    valid_data['vega'] = vega_values
+    valid_data['rho'] = rho_values
+    
+    # Update the result dataframe
     for col in ['iv', 'delta', 'gamma', 'theta', 'vega', 'rho']:
         result_df[col] = np.nan
     
@@ -263,17 +286,18 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
     
     return result_df
 
-def process_parquet_file_chunked(input_file_path, output_file_path, chunk_size=10000, risk_free_rate=0.065):
+def process_parquet_file_chunked(input_file_path, output_file_path, chunk_size=10000, risk_free_rate=0.065, num_processes=None):
     """
-    Process a parquet file in chunks to reduce memory consumption
+    Process a parquet file in chunks to reduce memory consumption using multiprocessing
     
     Args:
         input_file_path: Path to input parquet file
         output_file_path: Path to output parquet file
         chunk_size: Number of rows per chunk (default 10000)
         risk_free_rate: Risk-free rate (default 0.065)
+        num_processes: Number of processes to use for multiprocessing (default None = use all cores)
     """
-    logger.info(f"Processing {input_file_path} in chunks of {chunk_size} rows")
+    logger.info(f"Processing {input_file_path} in chunks of {chunk_size} rows using multiprocessing")
     
     try:
         parquet_file = pd.read_parquet(input_file_path)
@@ -293,7 +317,7 @@ def process_parquet_file_chunked(input_file_path, output_file_path, chunk_size=1
                                      engine='pyarrow',
                                      use_pandas_metadata=True)[chunk_start:chunk_end]
             
-            processed_chunk = process_options_chunk(chunk_df, risk_free_rate)
+            processed_chunk = process_options_chunk_mp(chunk_df, risk_free_rate, num_processes)
             processed_chunks.append(processed_chunk)
             
             del chunk_df, processed_chunk
@@ -316,14 +340,15 @@ def process_parquet_file_chunked(input_file_path, output_file_path, chunk_size=1
         logger.error(f"Error processing {input_file_path}: {str(e)}")
         raise
 
-def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_free_rate=0.065):
+def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_free_rate=0.065, num_processes=None):
     """
-    Process multiple parquet files in chunks to reduce memory consumption
+    Process multiple parquet files in chunks to reduce memory consumption using multiprocessing
     
     Args:
         chunk_size: Fixed chunk size (if None, will be calculated automatically)
         target_memory_mb: Target memory usage per chunk in MB (used if chunk_size is None)
         risk_free_rate: Risk-free rate
+        num_processes: Number of processes to use for multiprocessing (default None = use all cores)
     """
     input_path = Path("/mnt/disk2/cold_storage/processed_master_files/")
     output_path = Path("/mnt/disk2/cold_storage/greeks_master_files/")
@@ -334,6 +359,10 @@ def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_f
     
     output_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Created output directory: {output_path}")
+    
+    if num_processes is None:
+        num_processes = mp.cpu_count()
+    logger.info(f"Using {num_processes} processes for multiprocessing")
     
     parquet_files = list(input_path.glob("*.parquet"))
     if not parquet_files:
@@ -356,7 +385,8 @@ def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_f
                 file_path, 
                 output_file_path, 
                 chunk_size, 
-                risk_free_rate
+                risk_free_rate,
+                num_processes
             )
             
             logger.info(f"Successfully completed: {file_path.name}")
@@ -366,4 +396,5 @@ def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_f
             continue
 
 if __name__ == "__main__":
-    process_multiple_files_chunked(chunk_size=10000)
+    # Use multiprocessing with all available cores
+    process_multiple_files_chunked(chunk_size=10000, num_processes=None)

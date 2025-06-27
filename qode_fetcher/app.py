@@ -4,7 +4,8 @@ from database import get_database_connection, get_database_info
 from query_engine import QueryEngine
 from sql_interface import sql_query_interface
 from data_explorer import data_explorer
-from auth import require_authentication, show_user_info_sidebar
+# from auth import require_authentication, show_user_info_sidebar
+from auth_ms import require_authentication, show_user_info_sidebar
 from data_ingestor import ingest_data
 
 conn = get_database_connection()
@@ -14,19 +15,18 @@ def main():
     if not require_authentication():
         return
     
-    
-    st.set_page_config(
-        page_title="Qode Data Fetcher",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+    # st.set_page_config(
+    #     page_title="Jupiter",
+    #     layout="wide",
+    #     initial_sidebar_state="expanded"
+    # )
     
     if conn is None:
         st.error("Unable to connect to database. Please check your connection.")
         return
 
     with st.sidebar:
-        st.title("Qode Data Fetcher")
+        st.title("Jupiter")
         st.markdown("---")
         
         selected = option_menu(

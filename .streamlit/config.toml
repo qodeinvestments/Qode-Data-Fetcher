@@ -1,6 +1,7 @@
 [server]
+headless = true
 runOnSave = true
-port = 443
+port = 8501
 enableCORS = true
 enableXsrfProtection = true
 maxUploadSize = 1024

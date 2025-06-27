@@ -27,10 +27,10 @@ class QueryEngine:
         modify_pattern = r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|REPLACE|UPSERT|MERGE|COPY|GRANT|REVOKE)\b'
         return not re.search(modify_pattern, query, re.IGNORECASE)
 
-    def execute_query(self, sql_query):
+    def execute_query(self, sql_query, is_admin=False):
         user_email = st.session_state.get('email', 'unknown')
         
-        if not self._is_read_only_query(sql_query):
+        if not is_admin and not self._is_read_only_query(sql_query):
             error_msg = "ERROR: Only SELECT queries are allowed."
             self._log_query(user_email, sql_query, "FAILED", 0, error_msg)
             return None, 0, error_msg

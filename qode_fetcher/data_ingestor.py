@@ -42,7 +42,7 @@ def ingest_data(conn):
         - Ensure data has minimal timestamp gaps for time series data
         - Verify data integrity before upload (no corrupted files)
         - Check for existing similar datasets to avoid duplication
-        - Recommended file size: < 500MB for optimal performance
+        - Recommended file size: < 1GB for optimal performance
         
         **Supported Formats:**
         - CSV, Excel (xlsx/xls), Parquet, Pickle, CSV GZIP
@@ -93,8 +93,8 @@ def ingest_data(conn):
             file_name = uploaded_file.name
             st.info(f"File size: {file_size / (1024*1024):.2f} MB")
             
-            if file_size > 500 * 1024 * 1024:
-                st.warning("⚠️ File size exceeds 500MB. Consider splitting the data for better performance.")
+            if file_size > 1024 * 1024 * 1024:
+                st.warning("⚠️ File size exceeds 1GB. Consider splitting the data for better performance.")
     
     else:
         file_path = st.text_input(
@@ -110,8 +110,8 @@ def ingest_data(conn):
                     file_name = os.path.basename(file_path)
                     st.success(f"✅ File found. Size: {file_size / (1024*1024):.2f} MB")
                     
-                    if file_size > 500 * 1024 * 1024:
-                        st.warning("⚠️ File size exceeds 500MB. Consider splitting the data for better performance.")
+                    if file_size > 1024 * 1024 * 1024:
+                        st.warning("⚠️ File size exceeds 1GB. Consider splitting the data for better performance.")
                 else:
                     st.error("❌ File not found on server")
     

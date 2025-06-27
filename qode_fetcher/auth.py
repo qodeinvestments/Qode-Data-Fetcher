@@ -1,8 +1,24 @@
 import streamlit as st
 import json
 from typing import Dict, Optional
+from streamlit import session_state as ss
+# from streamlit_msal import Msal
+import os
+from dotenv import load_dotenv
 
-with open('users.json', 'r') as f:
+load_dotenv()
+
+client_id = os.getenv("AZURE_CLIENT_ID")
+tenant_id = os.getenv("AZURE_TENANT_ID")
+
+# Commented out to prevent duplicate MSAL initialization
+# auth_data = Msal.initialize(
+#     client_id=f"{client_id}",
+#     authority=f"https://login.microsoftonline.com/{tenant_id}",
+#     scopes=["User.Read"],
+# )
+
+with open('qode_fetcher/users.json', 'r') as f:
       USERS = json.load(f)
 
 def verify_credentials(email: str, password: str) -> Optional[Dict]:
@@ -55,7 +71,7 @@ def login_form():
     Returns:
         True if authentication is successful, False otherwise
     """
-    st.title("Qode Data Fetcher Login")
+    st.title("Jupiter Fetcher Login")
     st.markdown("---")
     
     with st.form("login_form"):

@@ -1,0 +1,83 @@
+{
+    "rows_returned": 1,
+    "latency": 0.005200054,
+    "result_set_size": 4,
+    "cumulative_rows_scanned": 4506165824,
+    "cumulative_cardinality": 42,
+    "extra_info": {},
+    "cpu_time": 0.005396145,
+    "blocked_thread_time": 0.0,
+    "query_name": "\n    SELECT DISTINCT expiry\n    FROM market_data.NSE_Options_BANKNIFTY_Master \n    WHERE timestamp = '2025-04-09 15:30:00'\n    ORDER BY expiry\n    ",
+    "children": [
+        {
+            "result_set_size": 4,
+            "operator_timing": 0.000063508,
+            "operator_rows_scanned": 0,
+            "cumulative_rows_scanned": 4506165824,
+            "operator_cardinality": 1,
+            "operator_type": "ORDER_BY",
+            "operator_name": "ORDER_BY",
+            "cumulative_cardinality": 42,
+            "extra_info": {
+                "Order By": "qode_edw.market_data.NSE_Options_BANKNIFTY_Master.expiry ASC"
+            },
+            "cpu_time": 0.005396145,
+            "children": [
+                {
+                    "result_set_size": 4,
+                    "operator_timing": 0.00479939,
+                    "operator_rows_scanned": 0,
+                    "cumulative_rows_scanned": 4506165824,
+                    "operator_cardinality": 1,
+                    "operator_type": "HASH_GROUP_BY",
+                    "operator_name": "HASH_GROUP_BY",
+                    "cumulative_cardinality": 41,
+                    "extra_info": {
+                        "Groups": "#0",
+                        "Aggregates": "",
+                        "Estimated Cardinality": "1163"
+                    },
+                    "cpu_time": 0.0053326369999999994,
+                    "children": [
+                        {
+                            "result_set_size": 80,
+                            "operator_timing": 0.000001352,
+                            "operator_rows_scanned": 0,
+                            "cumulative_rows_scanned": 4506165824,
+                            "operator_cardinality": 20,
+                            "operator_type": "PROJECTION",
+                            "operator_name": "PROJECTION",
+                            "cumulative_cardinality": 40,
+                            "extra_info": {
+                                "Projections": "expiry",
+                                "Estimated Cardinality": "1163"
+                            },
+                            "cpu_time": 0.0005332470000000001,
+                            "children": [
+                                {
+                                    "result_set_size": 80,
+                                    "operator_timing": 0.0005318950000000001,
+                                    "operator_rows_scanned": 4506165824,
+                                    "cumulative_rows_scanned": 4506165824,
+                                    "operator_cardinality": 20,
+                                    "operator_type": "TABLE_SCAN",
+                                    "operator_name": "SEQ_SCAN ",
+                                    "cumulative_cardinality": 20,
+                                    "extra_info": {
+                                        "Table": "NSE_Options_BANKNIFTY_Master",
+                                        "Type": "Sequential Scan",
+                                        "Projections": "expiry",
+                                        "Filters": "timestamp='2025-04-09 15:30:00'::TIMESTAMP_NS",
+                                        "Estimated Cardinality": "1163"
+                                    },
+                                    "cpu_time": 0.0005318950000000001,
+                                    "children": []
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
