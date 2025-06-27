@@ -38,53 +38,10 @@ def msal_auth_flow():
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("""
-        <style>
-        .microsoft-btn {
-            background-color: #2f2f2f !important;
-            color: white !important;
-            border: none !important;
-            padding: 12px 24px !important;
-            border-radius: 4px !important;
-            cursor: pointer !important;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
-            font-size: 14px !important;
-            font-weight: 600 !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            gap: 8px !important;
-            width: 100% !important;
-            transition: background-color 0.2s !important;
-        }
-        .microsoft-btn:hover {
-            background-color: #404040 !important;
-        }
-        .microsoft-logo {
-            width: 20px;
-            height: 20px;
-            display: inline-block;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Combined Microsoft button with logo and functionality
-        button_html = """
-        <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
-            <svg class="microsoft-logo" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg">
-                <path fill="#f25022" d="M1 1h10v10H1z"/>
-                <path fill="#7fba00" d="M12 1h10v10H12z"/>
-                <path fill="#00a4ef" d="M1 12h10v10H1z"/>
-                <path fill="#ffb900" d="M12 12h10v10H12z"/>
-            </svg>
-            Sign in with Microsoft
-        </div>
-        """
-        
-        if st.button(button_html, 
+        if st.button("Sign In with Microsoft", 
                     use_container_width=True, 
-                    help="Click to authenticate with your Microsoft account",
-                    key="microsoft-signin"):
+                    type="primary",
+                    help="Click to authenticate with your Microsoft account"):
             try:
                 result = Msal.sign_in()
                 if result and result.get("account"):
@@ -181,7 +138,7 @@ def require_authentication():
             }
             
             st.success(f"Welcome, {name}!")
-            # st.rerun()
+            st.rerun()
         else:
             pass
         return False
@@ -193,7 +150,6 @@ def show_user_info_sidebar():
         if user_info:
             with st.sidebar:
                 st.markdown("---")
-                st.markdown("### 👤 User Info")
                 st.write(f"**Name:** {user_info['first_name']} {user_info['last_name']}")
                 st.write(f"**Email:** {user_info['email']}")
                 
@@ -203,4 +159,4 @@ def show_user_info_sidebar():
                            help="Sign out from your account"):
                     logout()
                     st.success("Logged out successfully!")
-                    # st.rerun()
+                    st.rerun()

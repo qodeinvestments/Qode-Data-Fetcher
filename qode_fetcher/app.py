@@ -15,12 +15,6 @@ def main():
     if not require_authentication():
         return
     
-    # st.set_page_config(
-    #     page_title="Jupiter",
-    #     layout="wide",
-    #     initial_sidebar_state="expanded"
-    # )
-    
     if conn is None:
         st.error("Unable to connect to database. Please check your connection.")
         return

@@ -1,22 +1,10 @@
 import streamlit as st
 import json
 from typing import Dict, Optional
-from streamlit import session_state as ss
-# from streamlit_msal import Msal
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
-client_id = os.getenv("AZURE_CLIENT_ID")
-tenant_id = os.getenv("AZURE_TENANT_ID")
-
-# Commented out to prevent duplicate MSAL initialization
-# auth_data = Msal.initialize(
-#     client_id=f"{client_id}",
-#     authority=f"https://login.microsoftonline.com/{tenant_id}",
-#     scopes=["User.Read"],
-# )
 
 with open('qode_fetcher/users.json', 'r') as f:
       USERS = json.load(f)
