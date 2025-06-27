@@ -4,8 +4,8 @@ from database import get_database_connection, get_database_info
 from query_engine import QueryEngine
 from sql_interface import sql_query_interface
 from data_explorer import data_explorer
-# from auth import require_authentication, show_user_info_sidebar
-from auth_ms import require_authentication, show_user_info_sidebar
+from auth import require_authentication, show_user_info_sidebar
+# from auth_ms import require_authentication, show_user_info_sidebar
 from data_ingestor import ingest_data
 
 conn = get_database_connection()
