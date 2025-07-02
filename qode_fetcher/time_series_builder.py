@@ -207,7 +207,13 @@ def time_series_query_builder(query_engine):
 def handle_options_configuration(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Options Configuration")
     
-    option_methods = ["Single Instrument View", "Moneyness of an option", "Premium as a Percentage of Underlying", "Delta of an Option"]
+    option_methods = [
+        "Single Instrument View",
+        "Moneyness of an option",
+        "Premium as a Percentage of Underlying",
+        "Delta of an Option",
+        "Download All Options Master Data"
+    ]
     selected_method = st.selectbox("Select Method:", option_methods)
     
     if selected_method == "Single Instrument View":
@@ -218,6 +224,8 @@ def handle_options_configuration(query_engine, selected_exchange, selected_under
         handle_premium_percentage_view_with_info(query_engine, selected_exchange, selected_underlying)
     elif selected_method == "Delta of an Option":
         handle_delta_of_option_view_with_info(query_engine, selected_exchange, selected_underlying)
+    elif selected_method == "Download All Options Master Data":
+        handle_download_all_options_master_data(query_engine, selected_exchange, selected_underlying)
 
 def handle_single_instrument_view_with_info(query_engine, selected_exchange, selected_underlying):
     st.markdown("### Single Instrument Configuration")
@@ -467,7 +475,7 @@ def handle_premium_percentage_view_with_info(query_engine, selected_exchange, se
     selected_resample = st.selectbox("Resample Interval:", resample_options, key="premium_resample")
     
     master_table = f"market_data.{selected_exchange}_Options_{selected_underlying}_Master"
-    available_columns = get_table_columns(query_engine, master_table)
+    available_columns = get_table_columns(query_engine, master_table.replace("market_data.", ""))
     
     if not available_columns:
         st.error(f"Unable to fetch columns for master table: {master_table}")
@@ -1182,3 +1190,150 @@ def execute_multiple_tables_query(query_engine, table_names, selected_columns, s
         )
     else:
         st.error("No tables were successfully processed")
+
+def handle_download_all_options_master_data(query_engine, selected_exchange, selected_underlying):
+    st.markdown("### Download All Options Master Data")
+    master_table = f"market_data.{selected_exchange}_Options_{selected_underlying}_Master"
+    available_columns = get_table_columns(query_engine, master_table.replace("market_data.", ""))
+    if not available_columns:
+        st.error(f"Unable to fetch columns for master table: {master_table}")
+        return
+
+    # Time Range
+    st.markdown("### Time Range")
+    earliest, latest, _ = get_table_timestamp_info(query_engine, master_table.replace("market_data.", ""))
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "Start Date:",
+            value=earliest.date() if earliest else (datetime.now() - timedelta(days=30)).date(),
+            min_value=datetime(2000, 1, 1).date(),
+            max_value=datetime.now().date(),
+            key="download_master_start_date"
+        )
+        start_time = st.time_input(
+            "Start Time:",
+            value=earliest.time() if earliest else datetime.strptime("09:15:00", "%H:%M:%S").time(),
+            key="download_master_start_time"
+        )
+    with col2:
+        end_date = st.date_input(
+            "End Date:",
+            value=latest.date() if latest else datetime.now().date(),
+            max_value=datetime.now().date(),
+            key="download_master_end_date"
+        )
+        end_time = st.time_input(
+            "End Time:",
+            value=latest.time() if latest else datetime.strptime("15:30:00", "%H:%M:%S").time(),
+            key="download_master_end_time"
+        )
+    start_datetime = datetime.combine(start_date, start_time)
+    end_datetime = datetime.combine(end_date, end_time)
+    if start_datetime >= end_datetime:
+        st.error("Start datetime must be before end datetime")
+        return
+
+    # Data Configuration
+    st.markdown("### Data Configuration")
+    resample_options = ["Raw Data", "1s", "1m", "5m", "15m", "30m", "1h", "1d"]
+    selected_resample = st.selectbox("Resample Interval:", resample_options, key="download_master_resample")
+
+    # Select Columns
+    st.markdown("### Select Columns")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        select_all = st.checkbox("Select All", key="download_master_select_all")
+    with col2:
+        if select_all:
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=available_columns,
+                key="download_master_columns"
+            )
+        else:
+            default_cols = get_default_columns(available_columns, "Options")
+            selected_columns = st.multiselect(
+                "Columns:",
+                available_columns,
+                default=[col for col in default_cols if col in available_columns],
+                key="download_master_columns"
+            )
+    if not selected_columns:
+        st.warning("Please select at least one column")
+        return
+
+    # Generated Query
+    st.markdown("### Generated Query")
+    if selected_resample == "Raw Data":
+        columns_str = ", ".join([f'"{col}"' for col in selected_columns])
+        generated_query = f"""
+        SELECT {columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        ORDER BY timestamp
+        """
+    else:
+        agg_columns = []
+        for col in selected_columns:
+            if col == "timestamp":
+                agg_columns.append(f"time_bucket(INTERVAL '{selected_resample}', timestamp) as timestamp")
+            elif col in ["open", "high", "low", "close", "c"]:
+                if col == "open":
+                    agg_columns.append("FIRST(open) as open")
+                elif col == "high":
+                    agg_columns.append("MAX(high) as high")
+                elif col == "low":
+                    agg_columns.append("MIN(low) as low")
+                elif col == "close":
+                    agg_columns.append("LAST(close) as close")
+                elif col == "c":
+                    agg_columns.append("LAST(c) as c")
+            elif col in ["symbol", "underlying", "expiry", "strike", "option_type"]:
+                agg_columns.append(f"FIRST({col}) as {col}")
+            else:
+                agg_columns.append(f"FIRST({col}) as {col}")
+        agg_columns_str = ", ".join(agg_columns)
+        generated_query = f"""
+        SELECT {agg_columns_str}
+        FROM {master_table}
+        WHERE timestamp BETWEEN '{start_datetime}' AND '{end_datetime}'
+        GROUP BY time_bucket(INTERVAL '{selected_resample}', timestamp), symbol, strike, expiry
+        ORDER BY timestamp
+        """
+    generated_query = st.text_area(
+        "Generated Query",
+        value=generated_query.strip(),
+        height=len(generated_query.splitlines()) * 20 + 40,
+        key="download_master_query"
+    )
+
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        execute_button = st.button("Execute Query", type="primary", key="download_master_execute")
+
+    if execute_button:
+        with st.spinner("Executing query..."):
+            result, exec_time, error = query_engine.execute_query(generated_query)
+            if error:
+                st.error(f"Query Error: {error}")
+            elif len(result) == 0:
+                st.info("No data found in master table for selected range.")
+            else:
+                st.success(f"Query executed successfully in {exec_time:.2f} seconds")
+                st.write(f"**Results: {len(result)} rows**")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    csv = result.to_csv(index=False)
+                    st.download_button("Download as CSV", csv, f"{selected_exchange}_{selected_underlying}_Options_Master.csv")
+                with col2:
+                    json_data = result.to_json(orient='records')
+                    st.download_button("Download as JSON", json_data, f"{selected_exchange}_{selected_underlying}_Options_Master.json")
+                with col3:
+                    parquet_file = result.to_parquet()
+                    st.download_button("Download as Parquet", parquet_file, f"{selected_exchange}_{selected_underlying}_Options_Master.parquet")
+                with col4:
+                    gzip_file = result.to_csv(compression='gzip')
+                    st.download_button("Download as Gzip CSV", gzip_file, f"{selected_exchange}_{selected_underlying}_Options_Master.csv.gz", mime="application/gzip")
+                st.dataframe(result)

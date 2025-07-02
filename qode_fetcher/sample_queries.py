@@ -119,5 +119,11 @@ def get_sample_queries():
         FROM market_data.NSE_Futures_NIFTY
         WHERE timestamp BETWEEN '2024-01-01' AND '2024-01-31'
         GROUP BY day
-        ORDER BY day;"""
+        ORDER BY day;""",
+        "Options Master: Top 10 rows": "SELECT * FROM market_data.NSE_Options_NIFTY_Master LIMIT 10",
+        "Options Master: Daily OI and Volume by Option Type": "SELECT date_trunc('day', timestamp) AS day, option_type, SUM(open_interest) AS total_oi, SUM(volume) AS total_volume FROM market_data.NSE_Options_NIFTY_Master WHERE timestamp BETWEEN '2024-01-01' AND '2024-01-31' GROUP BY day, option_type ORDER BY day, option_type;",
+        "Options Master: ATM Options (strike closest to c) on Expiry Day": "WITH spot AS (SELECT expiry, MAX(timestamp) AS expiry_time, AVG(c) AS spot_price FROM market_data.NSE_Options_NIFTY_Master WHERE expiry = '2024-04-25' GROUP BY expiry) SELECT o.* FROM market_data.NSE_Options_NIFTY_Master o JOIN spot s ON o.expiry = s.expiry AND o.timestamp = s.expiry_time WHERE ABS(o.strike - s.spot_price) = (SELECT MIN(ABS(strike - s.spot_price)) FROM market_data.NSE_Options_NIFTY_Master WHERE expiry = s.expiry);",
+        "Options Master: OTM Calls with Premium < 50": "SELECT * FROM market_data.NSE_Options_NIFTY_Master WHERE option_type = 'call' AND close < 50 AND strike > c AND timestamp BETWEEN '2024-04-01' AND '2024-04-25' ORDER BY timestamp LIMIT 100;",
+        "Options Master: Expiry-wise Aggregation": "SELECT expiry, option_type, COUNT(*) AS contracts, SUM(volume) AS total_volume FROM market_data.NSE_Options_NIFTY_Master WHERE timestamp BETWEEN '2024-01-01' AND '2024-04-30' GROUP BY expiry, option_type ORDER BY expiry, option_type;",
+        "Options Master: IV/Greeks Columns (if available)": "SELECT timestamp, symbol, strike, expiry, option_type, iv, delta, gamma, theta, vega, rho FROM market_data.NSE_Options_NIFTY_Master WHERE expiry = '2024-04-25' AND option_type = 'call' AND strike = 22000 ORDER BY timestamp LIMIT 100;"
     }

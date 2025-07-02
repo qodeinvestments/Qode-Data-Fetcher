@@ -283,7 +283,6 @@ def fetch_data_for_segment(token, segment, timestamps):
                 df_to_store = group.copy()
                 
                 if instrument == 'Options':
-                    
                     for col in ['expiry', 'strike', 'option_type']:
                         if col not in df_to_store.columns:
                             if col == 'expiry':
@@ -309,7 +308,7 @@ def fetch_data(token, segments, timestamps):
         logger.info(f"Completed data fetch for segment: {segment}")
 
 if __name__ == "__main__":
-    dt_start = datetime.now().replace(hour=9, minute=15)
+    dt_start = (datetime.now() - pd.DateOffset(months=6)).replace(hour=9, minute=15)
     dt_end = datetime.now().replace(hour=15, minute=30)
     start_time = dt_start.strftime("%y%m%dT%H:%M")
     end_time = dt_end.strftime("%y%m%dT%H:%M")

@@ -8,22 +8,23 @@ import logging
 from pathlib import Path
 import multiprocessing as mp
 import gc
+from tqdm import tqdm
+import time
+import os
 warnings.filterwarnings('ignore')
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(processName)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('options_processing.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 warnings.filterwarnings('ignore')
 
 def black_scholes_price(S, K, T, r, sigma, option_type):
-    """
-    Calculate Black-Scholes option price
-    S: Current stock price
-    K: Strike price
-    T: Time to expiration (in years)
-    r: Risk-free rate
-    sigma: Volatility
-    option_type: 'call' or 'put'
-    """
     if T <= 0:
         if option_type == 'call':
             return max(S - K, 0)
@@ -41,9 +42,6 @@ def black_scholes_price(S, K, T, r, sigma, option_type):
     return price
 
 def vega(S, K, T, r, sigma):
-    """
-    Calculate vega (sensitivity to volatility)
-    """
     if T <= 0:
         return 0
     
@@ -51,9 +49,6 @@ def vega(S, K, T, r, sigma):
     return S * norm.pdf(d1) * np.sqrt(T)
 
 def newton_raphson_iv(market_price, S, K, T, r, option_type, max_iterations=100, tolerance=1e-6):
-    """
-    Calculate implied volatility using Newton-Raphson method
-    """
     if T <= 0:
         return np.nan
     
@@ -89,9 +84,6 @@ def newton_raphson_iv(market_price, S, K, T, r, option_type, max_iterations=100,
     return sigma if sigma > 0 else np.nan
 
 def calculate_greeks_custom(S, K, T, r, sigma, option_type):
-    """
-    Calculate Greeks using custom implementation
-    """
     if T <= 0 or sigma <= 0:
         return {'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 'vega': np.nan, 'rho': np.nan}
     
@@ -123,9 +115,6 @@ def calculate_greeks_custom(S, K, T, r, sigma, option_type):
     }
 
 def test_black_scholes_functions():
-    """
-    Test Black-Scholes and Newton-Raphson implementation
-    """
     S = 25108
     K = 25100
     T = 2/365
@@ -163,9 +152,6 @@ def test_black_scholes_functions():
     logger.info(f"Rho: {greeks.rho(option_type[0], S, K, T, r, sigma):.6f}")
 
 def calculate_time_to_expiry_minutes(timestamp, expiry_date):
-    """
-    Calculate time to expiry in minutes with expiry at 15:30
-    """
     if pd.isna(timestamp) or pd.isna(expiry_date):
         return np.nan
     
@@ -183,21 +169,24 @@ def calculate_time_to_expiry_minutes(timestamp, expiry_date):
     
     return time_diff.total_seconds() / 60
 
-def process_options_chunk(chunk_df, risk_free_rate=0.065):
-    """
-    Process a chunk of options data to calculate IV and Greeks
-    chunk_df: DataFrame chunk with columns [timestamp, open, high, low, close, c, expiry, strike, symbol, option_type]
-    risk_free_rate: Risk-free rate (default 0.065)
-    """
+def process_options_chunk(chunk_data):
+    chunk_df, chunk_index, total_chunks, risk_free_rate, process_id = chunk_data
+    
+    process_logger = logging.getLogger(f"Process-{process_id}")
+    process_logger.info(f"Starting chunk {chunk_index+1}/{total_chunks} with {len(chunk_df)} rows")
+    
+    start_time = time.time()
+    
     result_df = chunk_df.copy()
     
     mask = ~pd.isna(result_df['c'])
     
     if not mask.any():
-        logger.debug("No valid underlying prices found in chunk")
+        process_logger.debug(f"No valid underlying prices found in chunk {chunk_index+1}")
         return result_df
     
     valid_data = result_df[mask].copy()
+    process_logger.debug(f"Found {len(valid_data)} valid rows in chunk {chunk_index+1}")
     
     valid_data['timestamp'] = pd.to_datetime(valid_data['timestamp'])
     valid_data['expiry'] = pd.to_datetime(valid_data['expiry'])
@@ -209,6 +198,8 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
     valid_data['time_to_expiry_years'] = valid_data['time_to_expiry_minutes'] / (365 * 24 * 60)
     
     active_mask = valid_data['time_to_expiry_years'] > 0
+    active_count = active_mask.sum()
+    process_logger.debug(f"Found {active_count} active options in chunk {chunk_index+1}")
     
     valid_data.loc[:, 'iv'] = np.nan
     valid_data.loc[:, 'delta'] = np.nan
@@ -221,6 +212,7 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
         active_data = valid_data[active_mask].copy()
         
         iv_results = []
+        iv_errors = 0
         for idx, row in active_data.iterrows():
             try:
                 iv = newton_raphson_iv(
@@ -228,17 +220,25 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
                     row['time_to_expiry_years'], risk_free_rate, row['option_type']
                 )
                 iv_results.append(iv)
-            except:
+            except Exception as e:
+                process_logger.error(f"Error calculating IV for row {idx}: {str(e)}")
                 iv_results.append(np.nan)
+                iv_errors += 1
+        
+        if iv_errors > 0:
+            process_logger.warning(f"IV calculation errors in chunk {chunk_index+1}: {iv_errors}")
         
         valid_data.loc[active_mask, 'iv'] = iv_results
         
         iv_valid_mask = active_mask & ~pd.isna(valid_data['iv']) & (valid_data['iv'] > 0)
+        iv_valid_count = iv_valid_mask.sum()
+        process_logger.debug(f"Successfully calculated IV for {iv_valid_count} options in chunk {chunk_index+1}")
         
         if iv_valid_mask.any():
             iv_valid_data = valid_data[iv_valid_mask].copy()
             
             greeks_results = []
+            greeks_errors = 0
             for idx, row in iv_valid_data.iterrows():
                 try:
                     greeks_dict = calculate_greeks_custom(
@@ -246,11 +246,15 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
                         risk_free_rate, row['iv'], row['option_type']
                     )
                     greeks_results.append(greeks_dict)
-                except:
+                except Exception as e:
                     greeks_results.append({
                         'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 
                         'vega': np.nan, 'rho': np.nan
                     })
+                    greeks_errors += 1
+            
+            if greeks_errors > 0:
+                process_logger.warning(f"Greeks calculation errors in chunk {chunk_index+1}: {greeks_errors}")
             
             for i, (idx, _) in enumerate(iv_valid_data.iterrows()):
                 for greek in ['delta', 'gamma', 'theta', 'vega', 'rho']:
@@ -261,70 +265,65 @@ def process_options_chunk(chunk_df, risk_free_rate=0.065):
     
     result_df.update(valid_data[['iv', 'delta', 'gamma', 'theta', 'vega', 'rho']])
     
+    end_time = time.time()
+    processing_time = end_time - start_time
+    process_logger.info(f"Completed chunk {chunk_index+1}/{total_chunks} in {processing_time:.2f} seconds")
+    
     return result_df
 
-def process_parquet_file_chunked(input_file_path, output_file_path, chunk_size=10000, risk_free_rate=0.065):
-    """
-    Process a parquet file in chunks to reduce memory consumption
-    
-    Args:
-        input_file_path: Path to input parquet file
-        output_file_path: Path to output parquet file
-        chunk_size: Number of rows per chunk (default 10000)
-        risk_free_rate: Risk-free rate (default 0.065)
-    """
-    logger.info(f"Processing {input_file_path} in chunks of {chunk_size} rows")
+def process_parquet_file_multiprocess(input_file_path, output_file_path, chunk_size=10000, risk_free_rate=0.065, num_processes=24):
+    logger.info(f"Processing {input_file_path} with {num_processes} processes and chunk size {chunk_size}")
     
     try:
         parquet_file = pd.read_parquet(input_file_path)
         total_rows = len(parquet_file)
         logger.info(f"Total rows in file: {total_rows}")
         
-        del parquet_file
-        gc.collect()
-        
-        processed_chunks = []
+        chunks = []
+        chunk_indices = []
         
         for chunk_start in range(0, total_rows, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total_rows)
-            logger.info(f"Processing rows {chunk_start} to {chunk_end-1}")
-            
-            chunk_df = pd.read_parquet(input_file_path, 
-                                     engine='pyarrow',
-                                     use_pandas_metadata=True)[chunk_start:chunk_end]
-            
-            processed_chunk = process_options_chunk(chunk_df, risk_free_rate)
-            processed_chunks.append(processed_chunk)
-            
-            del chunk_df, processed_chunk
-            gc.collect()
-            
-            logger.info(f"Completed chunk {chunk_start//chunk_size + 1}/{(total_rows + chunk_size - 1)//chunk_size}")
+            chunk_df = parquet_file.iloc[chunk_start:chunk_end].copy()
+            chunk_index = chunk_start // chunk_size
+            chunks.append(chunk_df)
+            chunk_indices.append(chunk_index)
+        
+        del parquet_file
+        gc.collect()
+        
+        total_chunks = len(chunks)
+        logger.info(f"Created {total_chunks} chunks for processing")
+        
+        chunk_data_list = []
+        for i, chunk_df in enumerate(chunks):
+            chunk_data_list.append((chunk_df, i, total_chunks, risk_free_rate, os.getpid()))
+        
+        logger.info(f"Starting multiprocessing with {num_processes} processes")
+        
+        with mp.Pool(processes=num_processes) as pool:
+            with tqdm(total=total_chunks, desc="Processing chunks", unit="chunk") as pbar:
+                results = []
+                for result in pool.imap(process_options_chunk, chunk_data_list):
+                    results.append(result)
+                    pbar.update(1)
         
         logger.info("Combining processed chunks...")
-        final_df = pd.concat(processed_chunks, ignore_index=True)
+        final_df = pd.concat(results, ignore_index=True)
         
         logger.info(f"Saving processed data to {output_file_path}")
         final_df.to_parquet(output_file_path, index=False)
         
-        del final_df, processed_chunks
+        del final_df, results, chunks, chunk_data_list
         gc.collect()
         
-        logger.info(f"Successfully processed {input_file_path}")
+        logger.info(f"Successfully processed {input_file_path} with multiprocessing")
         
     except Exception as e:
         logger.error(f"Error processing {input_file_path}: {str(e)}")
         raise
 
-def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_free_rate=0.065):
-    """
-    Process multiple parquet files in chunks to reduce memory consumption
-    
-    Args:
-        chunk_size: Fixed chunk size (if None, will be calculated automatically)
-        target_memory_mb: Target memory usage per chunk in MB (used if chunk_size is None)
-        risk_free_rate: Risk-free rate
-    """
+def process_multiple_files_multiprocess(chunk_size=10000, risk_free_rate=0.065, num_processes=24):
     input_path = Path("/mnt/disk2/cold_storage/processed_master_files/")
     output_path = Path("/mnt/disk2/cold_storage/greeks_master_files/")
     
@@ -341,29 +340,49 @@ def process_multiple_files_chunked(chunk_size=None, target_memory_mb=500, risk_f
         return
     
     logger.info(f"Found {len(parquet_files)} parquet files to process")
+    logger.info(f"Using {num_processes} processes with chunk size {chunk_size}")
+    print(parquet_files)
     
-    for i, file_path in enumerate(parquet_files[1:], 1):
-        logger.info(f"Processing file {i}/{len(parquet_files)-1}: {file_path.name}")
-        
-        output_file_path = output_path / file_path.name
-        
-        if output_file_path.exists():
-            logger.info(f"Output file already exists, skipping: {output_file_path}")
-            continue
-        
-        try:
-            process_parquet_file_chunked(
-                file_path, 
-                output_file_path, 
-                chunk_size, 
-                risk_free_rate
-            )
+    with tqdm(total=len(parquet_files), desc="Processing files", unit="file") as file_pbar:
+        for i, file_path in enumerate(parquet_files):
+            print(file_path)
+            logger.info(f"Processing file {i}: {file_path.name}")
             
-            logger.info(f"Successfully completed: {file_path.name}")
+            output_file_path = output_path / file_path.name
+            print("output", output_file_path)
             
-        except Exception as e:
-            logger.error(f"Failed to process {file_path.name}: {str(e)}")
-            continue
+            if output_file_path.exists():
+                logger.info(f"Output file already exists, skipping: {output_file_path}")
+                file_pbar.update(1)
+                continue
+            
+            try:
+                file_start_time = time.time()
+                
+                process_parquet_file_multiprocess(
+                    file_path, 
+                    output_file_path, 
+                    chunk_size, 
+                    risk_free_rate,
+                    num_processes
+                )
+                
+                file_end_time = time.time()
+                file_processing_time = file_end_time - file_start_time
+                
+                logger.info(f"Successfully completed: {file_path.name} in {file_processing_time:.2f} seconds")
+                
+            except Exception as e:
+                logger.error(f"Failed to process {file_path.name}: {str(e)}")
+                continue
+            
+            file_pbar.update(1)
+    
+    logger.info("All files processed successfully")
 
 if __name__ == "__main__":
-    process_multiple_files_chunked(chunk_size=10000)
+    logger.info("Starting multiprocessed options pricing calculation")
+    logger.info(f"Available CPU cores: {mp.cpu_count()}")
+    logger.info(f"Using 24 cores for processing")
+    
+    process_multiple_files_multiprocess(chunk_size=10000, num_processes=24)
